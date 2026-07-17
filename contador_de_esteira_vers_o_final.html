@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contador de Esteira - OpenCV</title>
+    
+    <!-- Configuração para avisar quando o OpenCV terminar de carregar -->
+    <script>
+        var Module = {
+            onRuntimeInitialized: function() {
+                document.getElementById('status').innerText = "OpenCV Carregado! Permitindo câmera...";
+                document.getElementById('status').style.color = "#00FF66";
+                iniciarCamera();
+            }
+        };
+    </script>
+    <!-- Importando o OpenCV.js Oficial -->
+    <script async src="https://docs.opencv.org/4.8.0/opencv.js"></script>
+
+    <style>
+        body { 
+            margin: 0; background: #121212; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; 
+        }
+        #painel { 
+            background: #1e1e1e; padding: 15px 30px; border-radius: 12px; margin-bottom: 15px; 
+            border-left: 6px solid #00FF66; display: flex; gap: 20px; align-items: center; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5); z-index: 10;
+        }
+        #contador { font-size: 42px; font-weight: bold; color: #00FF66; font-family: monospace; }
+        
+        #controles {
+            background: #1e1e1e; padding: 15px; border-radius: 8px; margin-bottom: 15px; width: 610px;
+            display: flex; justify-content: space-between; align-items: center; font-size: 14px;
+        }
+        input[type=range] { width: 150px; }
+
+        #container-video { 
+            position: relative; width: 640px; height: 480px; background: #000; 
+            border-radius: 8px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.8); 
+        }
+        /* O vídeo real fica escondido, exibimos apenas o canvas processado */
+        video { display: none; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        
+        #status { margin-bottom: 10px; font-weight: bold; color: #FFA500; }
+    </style>
+</head>
+<body>
+
+    <div id="status">Carregando bibliotecas de Visão Computacional (aguarde uns segundos)...</div>
+    
+    <div id="painel">
+        <div>PEÇAS CONTADAS:</div>
+        <div id="contador">0</div>
+    </div>
+
+    <div id="controles">
+        <div>
+            <label for="filtroArea">Tamanho Mínimo da Peça (Filtro de Ruído): <span id="valArea">3000</span></label><br>
+            <input type="range" id="filtroArea" min="500" max="15000" value="3000">
+        </div>
+        <div>
+            <button onclick="resetarContagem()" style="padding: 10px; background: #b3261e; color: white; border: none; border-radius: 4px; cursor: pointer;">Zerar Contador</button>
+        </div>
+    </div>
+
+    <div id="container-video">
+        <video id="webcam" autoplay playsinline muted width="640" height="480"></video>
+        <!-- Canvas onde o OpenCV vai desenhar o resultado final -->
+        <canvas id="saidaCanvas" width="640" height="480"></canvas>
+    </div>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('saidaCanvas');
+        const ctx = canvas.getContext('2d');
+        const elemContador = document.getElementById('contador');
+        const sliderArea = document.getElementById('filtroArea');
+        const displayArea = document.getElementById('valArea');
+
+        // Configuração de Tela
+        const LARGURA = 640;
+        const ALTURA = 480;
+        const LINHA_X = LARGURA / 2; // Linha de corte no meio da tela
+
+        // Variáveis de Estado
+        let totalPecas = 0;
+        let isFlashAtivo = 0; // Efeito visual de contagem
+        
+        // --- RASTREADOR DE CENTROIDES (Tracker) ---
+        let objetosRastreados = new Map(); // Mapa: id -> {x, y}
+        let proximoID = 1;
+        const DISTANCIA_MAX_RASTREAMENTO = 100; // Se mover mais de 100px por frame, considera peça nova
+
+        // Atualiza display do slider
+        sliderArea.oninput = function() { displayArea.innerText = this.value; }
+        function resetarContagem() { totalPecas = 0; elemContador.innerText = totalPecas; }
+
+        // 1. Abre a câmera do Tablet/PC
+        async function iniciarCamera() {
+            try {
+                // Melhoria: pede a câmera traseira "com educação" usando { ideal: 'environment' }
+                // Isso evita erros em iPhones e Androids com múltiplas lentes
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { 
+                        facingMode: { ideal: 'environment' }, 
+                        width: { ideal: LARGURA }, 
+                        height: { ideal: ALTURA } 
+                    }
+                });
+                video.srcObject = stream;
+
+                video.onloadeddata = () => {
+                    document.getElementById('status').innerText = "Câmera ativa! Processando vídeo...";
+                    prepararOpenCV();
+                };
+            } catch (erro) {
+                document.getElementById('status').innerText = "Erro na câmera: " + erro.message;
+                document.getElementById('status').style.color = "red";
+            }
+        }
+
+        // Variáveis globais do OpenCV
+        let cap, src, fgmask, fgbg, hierarquia, contornos, elementoMorfologico;
+
+        function prepararOpenCV() {
+            src = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC4);
+            fgmask = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC1);
+            
+            // Subtração de Fundo
+            fgbg = new cv.BackgroundSubtractorMOG2(500, 16, false);
+            
+            contornos = new cv.MatVector();
+            hierarquia = new cv.Mat();
+            elementoMorfologico = cv.Mat.ones(5, 5, cv.CV_8U);
+
+            cap = new cv.VideoCapture(video);
+            requestAnimationFrame(processarVideo);
+        }
+
+        function processarVideo() {
+            try {
+                cap.read(src);
+                fgbg.apply(src, fgmask);
+
+                // Limpeza de ruídos
+                cv.morphologyEx(fgmask, fgmask, cv.MORPH_OPEN, elementoMorfologico);
+                cv.morphologyEx(fgmask, fgmask, cv.MORPH_CLOSE, elementoMorfologico);
+
+                cv.findContours(fgmask, contornos, hierarquia, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+                let deteccoesAtuais = [];
+                let areaMinima = parseInt(sliderArea.value);
+
+                for (let i = 0; i < contornos.size(); ++i) {
+                    let contorno = contornos.get(i);
+                    let area = cv.contourArea(contorno);
+                    
+                    if (area > areaMinima) {
+                        let retangulo = cv.boundingRect(contorno);
+                        deteccoesAtuais.push(retangulo); 
+                    }
+                }
+
+                logicaRastreamento(deteccoesAtuais);
+
+                cv.imshow('saidaCanvas', src);
+                desenharInterface(deteccoesAtuais);
+
+            } catch (err) {
+                console.error("Erro no processamento:", err);
+            }
+
+            requestAnimationFrame(processarVideo);
+        }
+
+        function logicaRastreamento(caixasDetectadas) {
+            let objetosAtualizados = new Map();
+
+            caixasDetectadas.forEach(caixa => {
+                let centroX = caixa.x + (caixa.width / 2);
+                let centroY = caixa.y + (caixa.height / 2);
+                
+                let melhorID = -1;
+                let menorDistancia = DISTANCIA_MAX_RASTREAMENTO;
+
+                for (let [id, posAntiga] of objetosRastreados.entries()) {
+                    let distancia = Math.hypot(centroX - posAntiga.x, centroY - posAntiga.y);
+                    if (distancia < menorDistancia) {
+                        menorDistancia = distancia;
+                        melhorID = id;
+                    }
+                }
+
+                if (melhorID !== -1) {
+                    let posAntiga = objetosRastreados.get(melhorID);
+                    
+                    // -- GATILHO DA LINHA DE CORTE --
+                    if (posAntiga.x < LINHA_X && centroX >= LINHA_X) {
+                        totalPecas++;
+                        elemContador.innerText = totalPecas;
+                        isFlashAtivo = 15; 
+                    }
+
+                    objetosAtualizados.set(melhorID, { x: centroX, y: centroY });
+                    objetosRastreados.delete(melhorID); 
+                } else {
+                    objetosAtualizados.set(proximoID, { x: centroX, y: centroY });
+                    proximoID++;
+                }
+            });
+
+            objetosRastreados = objetosAtualizados;
+        }
+
+        function desenharInterface(caixasDetectadas) {
+            ctx.beginPath();
+            ctx.moveTo(LINHA_X, 0);
+            ctx.lineTo(LINHA_X, ALTURA);
+            ctx.lineWidth = 4;
+            
+            if (isFlashAtivo > 0) {
+                ctx.strokeStyle = '#FFFFFF';
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = '#00FF66';
+                isFlashAtivo--;
+            } else {
+                ctx.strokeStyle = '#FF0000';
+                ctx.shadowBlur = 0;
+            }
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+
+            caixasDetectadas.forEach(caixa => {
+                ctx.strokeStyle = '#00FF66';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(caixa.x, caixa.y, caixa.width, caixa.height);
+                
+                ctx.fillStyle = '#00FF66';
+                let cx = caixa.x + caixa.width / 2;
+                let cy = caixa.y + caixa.height / 2;
+                ctx.fillRect(cx - 3, cy - 3, 6, 6);
+            });
+        }
+    </script>
+</body>
+</html>

@@ -1,22 +1,12 @@
-<!DOCTYPE html>
+
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Contador de Esteira - OpenCV</title>
+    <title>Contador de Esteira - OpenCV Corrigido</title>
     
-    <!-- Configuração para avisar quando o OpenCV terminar de carregar -->
-    <script>
-        var Module = {
-            onRuntimeInitialized: function() {
-                document.getElementById('status').innerText = "OpenCV Carregado! Permitindo câmera...";
-                document.getElementById('status').style.color = "#00FF66";
-                iniciarCamera();
-            }
-        };
-    </script>
-    <!-- Importando o OpenCV.js Oficial -->
-    <script async src="https://docs.opencv.org/4.8.0/opencv.js"></script>
+    <!-- Importando o OpenCV.js -->
+    <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
 
     <style>
         body { 
@@ -31,25 +21,25 @@
         #contador { font-size: 42px; font-weight: bold; color: #00FF66; font-family: monospace; }
         
         #controles {
-            background: #1e1e1e; padding: 15px; border-radius: 8px; margin-bottom: 15px; width: 610px;
-            display: flex; justify-content: space-between; align-items: center; font-size: 14px;
+            background: #1e1e1e; padding: 15px; border-radius: 8px; margin-bottom: 15px; width: 90%; max-width: 610px;
+            display: flex; flex-direction: column; gap: 10px; font-size: 14px;
         }
+        .linha-controle { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
         input[type=range] { width: 150px; }
 
         #container-video { 
-            position: relative; width: 640px; height: 480px; background: #000; 
+            position: relative; width: 100%; max-width: 640px; aspect-ratio: 4/3; background: #000; 
             border-radius: 8px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.8); 
         }
-        /* O vídeo real fica escondido, exibimos apenas o canvas processado */
         video { display: none; }
-        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
         
-        #status { margin-bottom: 10px; font-weight: bold; color: #FFA500; }
+        #status { margin-bottom: 10px; font-weight: bold; color: #FFA500; text-align: center; padding: 0 10px; }
     </style>
 </head>
 <body>
 
-    <div id="status">Carregando bibliotecas de Visão Computacional (aguarde uns segundos)...</div>
+    <div id="status">Baixando biblioteca OpenCV.js (~8MB). Isso pode levar alguns segundos...</div>
     
     <div id="painel">
         <div>PEÇAS CONTADAS:</div>
@@ -57,52 +47,88 @@
     </div>
 
     <div id="controles">
-        <div>
-            <label for="filtroArea">Tamanho Mínimo da Peça (Filtro de Ruído): <span id="valArea">3000</span></label><br>
-            <input type="range" id="filtroArea" min="500" max="15000" value="3000">
+        <div class="linha-controle">
+            <label for="filtroArea" title="Tamanho mínimo em pixels para considerar como uma peça válida.">Área Mínima da Peça: <span id="valArea">3000</span> px</label>
+            <input type="range" id="filtroArea" min="100" max="15000" value="3000" step="100">
         </div>
-        <div>
-            <button onclick="resetarContagem()" style="padding: 10px; background: #b3261e; color: white; border: none; border-radius: 4px; cursor: pointer;">Zerar Contador</button>
+        <div class="linha-controle">
+            <label for="sensibilidade" title="Valores maiores ignoram mais o fundo.">Sensibilidade MOG2: <span id="valSensibilidade">25</span></label>
+            <input type="range" id="sensibilidade" min="10" max="150" value="25" step="5">
+        </div>
+        <div class="linha-controle">
+            <label for="erosao" title="Aumente para separar peças que passam muito próximas umas das outras.">Força de Separação (Erosão): <span id="valErosao">3</span></label>
+            <input type="range" id="erosao" min="1" max="15" value="3" step="2">
+        </div>
+        <div style="text-align: center; margin-top: 10px; display: flex; gap: 10px; justify-content: center;">
+            <button id="btnAplicar" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Aplicar Mudanças no Fundo</button>
+            <button onclick="resetarContagem()" style="padding: 10px 20px; background: #b3261e; color: white; border: none; border-radius: 4px; cursor: pointer;">Zerar Contador</button>
+        </div>
+        <div style="font-size: 11px; color: #888; text-align: center; margin-top: 5px;">
+            Aviso: Alterar a Sensibilidade reinicia a memória de fundo da câmera.
         </div>
     </div>
 
     <div id="container-video">
         <video id="webcam" autoplay playsinline muted width="640" height="480"></video>
-        <!-- Canvas onde o OpenCV vai desenhar o resultado final -->
         <canvas id="saidaCanvas" width="640" height="480"></canvas>
     </div>
 
     <script>
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('saidaCanvas');
-        const ctx = canvas.getContext('2d');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
         const elemContador = document.getElementById('contador');
+        
         const sliderArea = document.getElementById('filtroArea');
         const displayArea = document.getElementById('valArea');
+        const sliderSensibilidade = document.getElementById('sensibilidade');
+        const displaySensibilidade = document.getElementById('valSensibilidade');
+        const sliderErosao = document.getElementById('erosao');
+        const displayErosao = document.getElementById('valErosao');
+        const btnAplicar = document.getElementById('btnAplicar');
 
-        // Configuração de Tela
+        // Configuração de Tela (Usamos 640x480 fixos internamente para o OpenCV para manter o FPS alto)
         const LARGURA = 640;
         const ALTURA = 480;
-        const LINHA_X = LARGURA / 2; // Linha de corte no meio da tela
+        const LINHA_X = LARGURA / 2; 
 
         // Variáveis de Estado
         let totalPecas = 0;
-        let isFlashAtivo = 0; // Efeito visual de contagem
+        let isFlashAtivo = 0; 
+        let openCvPronto = false;
+        let processamentoRodando = false;
         
-        // --- RASTREADOR DE CENTROIDES (Tracker) ---
-        let objetosRastreados = new Map(); // Mapa: id -> {x, y}
+        // Rastreamento
+        let objetosRastreados = new Map(); 
         let proximoID = 1;
-        const DISTANCIA_MAX_RASTREAMENTO = 100; // Se mover mais de 100px por frame, considera peça nova
+        const DISTANCIA_MAX_RASTREAMENTO = 150; 
 
-        // Atualiza display do slider
+        // Objetos C++ do OpenCV guardados no JS
+        let cap = null;
+        let src = null;
+        let fgmask = null;
+        let fgbg = null;
+        let contornos = null;
+        let hierarquia = null;
+
+        // Sliders atualizam o display de texto em tempo real
         sliderArea.oninput = function() { displayArea.innerText = this.value; }
+        sliderSensibilidade.oninput = function() { displaySensibilidade.innerText = this.value; }
+        sliderErosao.oninput = function() { displayErosao.innerText = this.value; }
+        
         function resetarContagem() { totalPecas = 0; elemContador.innerText = totalPecas; }
 
-        // 1. Abre a câmera do Tablet/PC
+        function onOpenCvReady() {
+            // Essa função é chamada pelo evento 'onload' da tag script do OpenCV
+            openCvPronto = true;
+            document.getElementById('status').innerText = "OpenCV Carregado! Permitindo acesso à câmera...";
+            document.getElementById('status').style.color = "#00FF66";
+            iniciarCamera();
+        }
+
         async function iniciarCamera() {
             try {
-                // Melhoria: pede a câmera traseira "com educação" usando { ideal: 'environment' }
-                // Isso evita erros em iPhones e Androids com múltiplas lentes
+                // Solicita câmera traseira do tablet
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { 
                         facingMode: { ideal: 'environment' }, 
@@ -113,80 +139,151 @@
                 video.srcObject = stream;
 
                 video.onloadeddata = () => {
-                    document.getElementById('status').innerText = "Câmera ativa! Processando vídeo...";
-                    prepararOpenCV();
+                    // Força largura e altura no elemento de vídeo e no canvas para alinhar a matriz do OpenCV
+                    video.width = LARGURA;
+                    video.height = ALTURA;
+                    canvas.width = LARGURA;
+                    canvas.height = ALTURA;
+
+                    document.getElementById('status').innerText = "Câmera ativa! Subtraindo fundo...";
+                    if (!processamentoRodando) {
+                        prepararOpenCV();
+                    }
                 };
             } catch (erro) {
-                document.getElementById('status').innerText = "Erro na câmera: " + erro.message;
-                document.getElementById('status').style.color = "red";
+                document.getElementById('status').innerText = "Erro na câmera. Verifique se o link tem HTTPS (cadeado). Erro: " + erro.message;
+                document.getElementById('status').style.color = "#b3261e";
             }
         }
 
-        // Variáveis globais do OpenCV
-        let cap, src, fgmask, fgbg, hierarquia, contornos, elementoMorfologico;
-
         function prepararOpenCV() {
+            if (!cv || !cv.Mat) {
+                setTimeout(prepararOpenCV, 100); // Aguarda o OpenCV terminar de instanciar internamente
+                return;
+            }
+
+            // Aloca a memória das matrizes de imagem apenas uma vez
             src = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC4);
             fgmask = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC1);
-            
-            // Subtração de Fundo
-            fgbg = new cv.BackgroundSubtractorMOG2(500, 16, false);
-            
             contornos = new cv.MatVector();
             hierarquia = new cv.Mat();
-            elementoMorfologico = cv.Mat.ones(5, 5, cv.CV_8U);
+
+            criarSubtratorDeFundo(); // Cria a instância MOG2 com a sensibilidade atual do slider
 
             cap = new cv.VideoCapture(video);
+            
+            // Registra que já está rodando para não criar múltiplos loops se a câmera reiniciar
+            processamentoRodando = true;
+            document.getElementById('status').style.display = 'none'; // Esconde o aviso de carregamento
+
             requestAnimationFrame(processarVideo);
         }
 
+        function criarSubtratorDeFundo() {
+            // Se já existir um, nós o deletamos da memória para evitar Memory Leak (vazamento de RAM no navegador)
+            if (fgbg != null) {
+                fgbg.delete();
+            }
+            
+            let sensibilidade = parseInt(sliderSensibilidade.value);
+            
+            // createBackgroundSubtractorMOG2(history, varThreshold, detectShadows)
+            // history: Quantos frames passados ele lembra.
+            // varThreshold: A nossa "Sensibilidade". Quanto maior, mais diferença ele exige para considerar "movimento".
+            // detectShadows: false. Sombras costumam confundir a contagem. É melhor ignorá-las no cálculo.
+            fgbg = new cv.BackgroundSubtractorMOG2(500, sensibilidade, false);
+            console.log("MOG2 Recriado com Sensibilidade (Threshold):", sensibilidade);
+        }
+
+        // Evento do botão Aplicar para mudar a sensibilidade sem o erro de 'setVarThreshold'
+        btnAplicar.onclick = () => {
+            if (openCvPronto && processamentoRodando) {
+                criarSubtratorDeFundo();
+                document.getElementById('status').style.display = 'block';
+                document.getElementById('status').innerText = "Fundo reiniciado com a nova sensibilidade.";
+                setTimeout(() => { document.getElementById('status').style.display = 'none'; }, 3000);
+            }
+        };
+
         function processarVideo() {
+            if (!processamentoRodando) return;
+
             try {
+                // Lê o quadro atual do vídeo para a matriz 'src'
                 cap.read(src);
+                
+                // Aplica a subtração de fundo
                 fgbg.apply(src, fgmask);
 
-                // Limpeza de ruídos
-                cv.morphologyEx(fgmask, fgmask, cv.MORPH_OPEN, elementoMorfologico);
-                cv.morphologyEx(fgmask, fgmask, cv.MORPH_CLOSE, elementoMorfologico);
+                // --- FILTROS DE LIMPEZA (MORFOLOGIA) ---
+                // Para consertar peças que grudam e marcas na lona
+                let kernelSizeErosao = parseInt(sliderErosao.value);
+                // Matrizes de convolução precisam ter tamanhos ímpares no OpenCV
+                if (kernelSizeErosao % 2 === 0) kernelSizeErosao++; 
+                
+                // Elemento kernel estruturante (como se fosse um pincel para limpar os pixels)
+                let elemento = cv.Mat.ones(kernelSizeErosao, kernelSizeErosao, cv.CV_8U);
+                
+                // 1. MORPH_OPEN (Erosão seguida de dilatação) - Remove manchas isoladas de sujeira e sujeira entre peças coladas
+                cv.morphologyEx(fgmask, fgmask, cv.MORPH_OPEN, elemento);
+                
+                // 2. MORPH_CLOSE (Dilatação seguida de erosão) - Tapa buracos escuros "dentro" do corpo branco da peça
+                // Usa um kernel levemente maior para garantir que feche buracos grandes no meio da peça
+                let elementoClose = cv.Mat.ones(kernelSizeErosao + 4, kernelSizeErosao + 4, cv.CV_8U);
+                cv.morphologyEx(fgmask, fgmask, cv.MORPH_CLOSE, elementoClose);
+                
+                // Limpa memória dos elementos temporários a cada frame!
+                elemento.delete();
+                elementoClose.delete();
 
+                // Busca os contornos dos objetos brancos na tela
                 cv.findContours(fgmask, contornos, hierarquia, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
                 let deteccoesAtuais = [];
                 let areaMinima = parseInt(sliderArea.value);
 
+                // Analisa todos os agrupamentos brancos encontrados
                 for (let i = 0; i < contornos.size(); ++i) {
                     let contorno = contornos.get(i);
                     let area = cv.contourArea(contorno);
                     
+                    // Se o objeto for maior que o limite configurado no slider
                     if (area > areaMinima) {
                         let retangulo = cv.boundingRect(contorno);
                         deteccoesAtuais.push(retangulo); 
                     }
                 }
 
-                logicaRastreamento(deteccoesAtuais);
+                logicaRastreamentoEContagem(deteccoesAtuais);
 
+                // Mostramos a imagem original capturada na câmera em vez da máscara preta e branca
                 cv.imshow('saidaCanvas', src);
+                
+                // E desenhamos nossas anotações e a linha de corte por cima da imagem
                 desenharInterface(deteccoesAtuais);
 
             } catch (err) {
                 console.error("Erro no processamento:", err);
             }
 
+            // Repete o ciclo no próximo frame de tela livre
             requestAnimationFrame(processarVideo);
         }
 
-        function logicaRastreamento(caixasDetectadas) {
+        function logicaRastreamentoEContagem(caixasDetectadas) {
             let objetosAtualizados = new Map();
 
             caixasDetectadas.forEach(caixa => {
+                // Descobre o ponto central do objeto
                 let centroX = caixa.x + (caixa.width / 2);
                 let centroY = caixa.y + (caixa.height / 2);
                 
                 let melhorID = -1;
                 let menorDistancia = DISTANCIA_MAX_RASTREAMENTO;
 
+                // Tenta parear esse objeto com as caixas que estavam na tela no frame anterior
                 for (let [id, posAntiga] of objetosRastreados.entries()) {
+                    // Cálculo de distância geométrica entre dois pontos
                     let distancia = Math.hypot(centroX - posAntiga.x, centroY - posAntiga.y);
                     if (distancia < menorDistancia) {
                         menorDistancia = distancia;
@@ -195,49 +292,60 @@
                 }
 
                 if (melhorID !== -1) {
+                    // Nós sabemos quem é essa peça (Achou um ID passado)
                     let posAntiga = objetosRastreados.get(melhorID);
                     
-                    // -- GATILHO DA LINHA DE CORTE --
+                    // --- O GRANDE GATILHO DA LINHA ---
+                    // Se no frame passado o X dele era menor que a linha, e AGORA é maior ou igual...
                     if (posAntiga.x < LINHA_X && centroX >= LINHA_X) {
                         totalPecas++;
                         elemContador.innerText = totalPecas;
-                        isFlashAtivo = 15; 
+                        isFlashAtivo = 15; // Ativa a cor verde neon por alguns frames
                     }
 
+                    // Guarda a posição atual para o próximo frame
                     objetosAtualizados.set(melhorID, { x: centroX, y: centroY });
+                    // Remove do mapa velho para garantir que não pareie a mesma peça velha duas vezes
                     objetosRastreados.delete(melhorID); 
                 } else {
+                    // É uma peça nova que acabou de entrar na visão da câmera
                     objetosAtualizados.set(proximoID, { x: centroX, y: centroY });
                     proximoID++;
                 }
             });
 
+            // Atualiza a memória global
             objetosRastreados = objetosAtualizados;
         }
 
         function desenharInterface(caixasDetectadas) {
+            // Desenha a linha virtual de cruzamento no Canvas 2D
             ctx.beginPath();
             ctx.moveTo(LINHA_X, 0);
             ctx.lineTo(LINHA_X, ALTURA);
             ctx.lineWidth = 4;
             
             if (isFlashAtivo > 0) {
+                // A peça cruzou a linha! Pisca verde brilhante.
                 ctx.strokeStyle = '#FFFFFF';
                 ctx.shadowBlur = 20;
                 ctx.shadowColor = '#00FF66';
                 isFlashAtivo--;
             } else {
+                // Repouso: Linha vermelha
                 ctx.strokeStyle = '#FF0000';
                 ctx.shadowBlur = 0;
             }
             ctx.stroke();
             ctx.shadowBlur = 0;
 
+            // Desenha os retângulos verdes nas peças encontradas
             caixasDetectadas.forEach(caixa => {
                 ctx.strokeStyle = '#00FF66';
                 ctx.lineWidth = 2;
                 ctx.strokeRect(caixa.x, caixa.y, caixa.width, caixa.height);
                 
+                // Pontinho do centro exato
                 ctx.fillStyle = '#00FF66';
                 let cx = caixa.x + caixa.width / 2;
                 let cy = caixa.y + caixa.height / 2;

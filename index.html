@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Contador de Esteira - Limiar Absoluto</title>
     
-    <!-- Importando o OpenCV.js -->
     <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
 
     <style>
@@ -28,15 +27,15 @@
         input[type=range] { width: 150px; }
 
         .checkbox-container { display: flex; align-items: center; gap: 10px; cursor: pointer; }
-        .btn-acao { padding: 8px 15px; background: #333; color: white; border: 1px solid #555; border-radius: 4px; cursor: pointer; transition: 0.2s;}
+        .btn-acao { padding: 8px 15px; background: #333; color: white; border: 1px solid #555; border-radius: 4px; cursor: pointer; transition: 0.2s; font-weight: bold;}
         .btn-acao:hover { background: #555; }
-        .btn-acao.ativo { background: #007bff; border-color: #007bff; }
+        .btn-acao.ativo { background: #007bff; border-color: #007bff; color: white;}
 
         #container-video { 
             position: relative; width: 100%; max-width: 640px; aspect-ratio: 4/3; background: #000; 
             border-radius: 8px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.8); 
         }
-        video { display: none; }
+        video { display: none; } /* Ocultamos o vídeo original, mostramos apenas o canvas com OpenCV */
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
         
         #status { margin-bottom: 10px; font-weight: bold; color: #FFA500; text-align: center; padding: 0 10px; }
@@ -44,7 +43,7 @@
 </head>
 <body>
 
-    <div id="status">Baixando biblioteca OpenCV.js (~8MB). Isso pode levar alguns segundos...</div>
+    <div id="status">Baixando motor OpenCV (~8MB). Isso pode levar alguns segundos...</div>
     
     <div id="painel">
         <div>PEÇAS CONTADAS:</div>
@@ -52,39 +51,40 @@
     </div>
 
     <div id="controles">
-        <!-- CONTROLES DO NOVO MOTOR DE THRESHOLD -->
+        <!-- Controles da Binarização Absoluta -->
         <div class="linha-controle">
-            <label for="limiarCorte" title="Tons de cinza. Move para isolar a peça do fundo.">Nota de Corte do Contraste (Limiar): <span id="valLimiar">100</span></label>
+            <label for="limiarCorte" title="Move para isolar a peça do fundo.">Nota de Corte do Contraste: <span id="valLimiar">100</span></label>
             <input type="range" id="limiarCorte" min="10" max="240" value="100" step="1">
         </div>
         
         <div class="linha-controle">
-            <label title="A esteira é clara e a peça escura, ou vice-versa?">Inverter Cores (Peça vs Fundo):</label>
+            <label title="A esteira é clara e a peça escura, ou vice-versa?">Configuração da Cor (Inversão):</label>
             <button id="btnInverter" class="btn-acao ativo">Peça Escura no Fundo Claro</button>
         </div>
 
         <hr style="border: 0; border-top: 1px solid #444; width: 100%; margin: 5px 0;">
 
-        <!-- CONTROLES ANTIGOS DE TAMANHO E POSIÇÃO -->
+        <!-- Controles de Filtro e Depuração -->
         <div class="linha-controle">
-            <label for="filtroArea">Tamanho Mínimo da Peça (Pixels): <span id="valArea">3000</span> px</label>
-            <input type="range" id="filtroArea" min="100" max="15000" value="3000" step="100">
+            <label for="filtroArea">Tamanho Mínimo da Peça (Ruído): <span id="valArea">3000</span> px</label>
+            <input type="range" id="filtroArea" min="100" max="25000" value="3000" step="100">
         </div>
         
         <div class="linha-controle">
-            <label title="Para ver o que o OpenCV está enxergando por baixo dos panos.">Modo de Depuração (Máscara P&B):</label>
+            <label title="Ligue para regular a Nota de Corte perfeitamente.">Visão da Máquina (Binarização):</label>
             <label class="checkbox-container">
                 <input type="checkbox" id="chkDepuracao"> Mostrar Máscara de Contraste
             </label>
         </div>
 
         <div style="text-align: center; margin-top: 10px;">
-            <button onclick="resetarContagem()" style="padding: 10px 20px; background: #b3261e; color: white; border: none; border-radius: 4px; cursor: pointer;">Zerar Contador</button>
+            <button onclick="resetarContagem()" style="padding: 10px 20px; background: #b3261e; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Zerar Contador</button>
         </div>
     </div>
 
     <div id="container-video">
         <video id="webcam" autoplay playsinline muted width="640" height="480"></video>
+        <!-- O OpenCV vai desenhar os frames diretamente neste canvas -->
         <canvas id="saidaCanvas" width="640" height="480"></canvas>
     </div>
 
@@ -104,19 +104,21 @@
 
         const LARGURA = 640;
         const ALTURA = 480;
+        // A linha virtual ficará exatamente no meio da tela
         const LINHA_X = LARGURA / 2; 
 
         let totalPecas = 0;
         let isFlashAtivo = 0; 
         let processamentoRodando = false;
         
-        // Rastreamento
+        // Memória de Rastreamento (Tracking)
         let objetosRastreados = new Map(); 
         let proximoID = 1;
         const DISTANCIA_MAX_RASTREAMENTO = 150; 
         
-        // Estado do Filtro
-        let pecaEscura = true; // Por padrão, procura peças escuras (Inv Threshold)
+        // Estado do Filtro: Por padrão, a IA busca objetos brancos no fundo preto.
+        // Se a esteira for clara e a peça escura, precisamos inverter a imagem.
+        let pecaEscura = true; 
 
         sliderLimiar.oninput = function() { displayLimiar.innerText = this.value; }
         sliderArea.oninput = function() { displayArea.innerText = this.value; }
@@ -134,17 +136,18 @@
 
         function resetarContagem() { totalPecas = 0; elemContador.innerText = totalPecas; }
 
-        // Objetos de matriz que ficarão vivos na memória
+        // Variáveis globais do OpenCV para evitar vazamento de memória (Memory Leak)
         let cap, src, gray, blur, thresholded, hierarquia, contornos;
 
         function onOpenCvReady() {
-            document.getElementById('status').innerText = "OpenCV Carregado! Permitindo acesso à câmera...";
+            document.getElementById('status').innerText = "OpenCV Carregado! Solicitando câmera...";
             document.getElementById('status').style.color = "#00FF66";
             iniciarCamera();
         }
 
         async function iniciarCamera() {
             try {
+                // Solicita a câmera traseira do tablet (environment)
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: { ideal: 'environment' }, width: { ideal: LARGURA }, height: { ideal: ALTURA } }
                 });
@@ -153,7 +156,7 @@
                 video.onloadeddata = () => {
                     video.width = LARGURA; video.height = ALTURA;
                     canvas.width = LARGURA; canvas.height = ALTURA;
-                    document.getElementById('status').innerText = "Câmera ativa! Ajuste o Limiar de Contraste.";
+                    document.getElementById('status').innerText = "Câmera ativa! Ajuste a Máscara e a Nota de Corte.";
                     if (!processamentoRodando) prepararOpenCV();
                 };
             } catch (erro) {
@@ -164,11 +167,11 @@
 
         function prepararOpenCV() {
             if (!cv || !cv.Mat) {
-                setTimeout(prepararOpenCV, 100);
+                setTimeout(prepararOpenCV, 100); // Aguarda inicialização completa
                 return;
             }
 
-            // Aloca a memória das matrizes apenas uma vez para o novo algoritmo
+            // Aloca a memória das matrizes apenas UMA vez para economizar bateria e CPU
             src = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC4);
             gray = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC1);
             blur = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC1);
@@ -177,11 +180,13 @@
             hierarquia = new cv.Mat();
             contornos = new cv.MatVector();
 
+            // Linka a tag <video> ao motor do OpenCV
             cap = new cv.VideoCapture(video);
             
             processamentoRodando = true;
             document.getElementById('status').style.display = 'none';
 
+            // Inicia o laço infinito
             requestAnimationFrame(processarVideo);
         }
 
@@ -189,54 +194,57 @@
             if (!processamentoRodando) return;
 
             try {
-                // 1. Lê a imagem da câmera
+                // 1. Captura o frame atual da câmera
                 cap.read(src);
                 
-                // 2. Converte para Preto e Branco puros (Tons de cinza)
+                // 2. Converte para tons de cinza (descarta a cor)
                 cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
                 
-                // 3. Aplica um "Borrão" fortíssimo para sumir com ranhuras, fios e sujeira da esteira
-                // O kernel (21,21) é grande, suaviza tudo. A peça grande sobrevive.
+                // 3. Aplica um desfoque (Blur) extremo. 
+                // Isso elimina as texturas e ranhuras da esteira, fundindo a peça em um bloco sólido.
                 let ksize = new cv.Size(21, 21);
                 cv.GaussianBlur(gray, blur, ksize, 0, 0, cv.BORDER_DEFAULT);
 
-                // 4. O Coração do Código: O Gatilho do Limiar (Threshold)
+                // 4. Binarização Absoluta (A Mágica do Contraste)
                 let valorLimiar = parseInt(sliderLimiar.value);
                 
-                // O OpenCV espera binarizar a imagem (deixar 100% branca ou 100% preta).
-                // cv.THRESH_BINARY_INV : Para Peças Escuras na lona clara (A lona vira preto, a peça vira branco)
-                // cv.THRESH_BINARY : Para Peças Claras na lona escura (A peça brilha em branco)
+                // Se a peça for mais escura que a esteira, usamos INVERSÃO para que o objeto fique Branco.
+                // O OpenCV SÓ RASTREIA O QUE FOR BRANCO (Pixels 255).
                 let tipoThreshold = pecaEscura ? cv.THRESH_BINARY_INV : cv.THRESH_BINARY;
                 
-                // TUDO que for "maior ou menor" que a nota de corte (valorLimiar) vira 255 (Branco intenso). O resto morre em 0 (Preto).
+                // Tudo que cruzar a 'Nota de Corte' vira 255 (Branco), o resto vira 0 (Preto).
                 cv.threshold(blur, thresholded, valorLimiar, 255, tipoThreshold);
 
-                // 5. Encontra os Contornos no bololô branco que sobrou
+                // 5. Encontra as bordas/contornos das manchas brancas que restaram
                 cv.findContours(thresholded, contornos, hierarquia, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
                 let deteccoesAtuais = [];
                 let areaMinima = parseInt(sliderArea.value);
 
+                // Passa por todos os objetos brancos encontrados
                 for (let i = 0; i < contornos.size(); ++i) {
                     let contorno = contornos.get(i);
                     let area = cv.contourArea(contorno);
                     
+                    // Se o bloco branco for muito pequeno, é sujeira. Ignora.
                     if (area > areaMinima) {
                         let retangulo = cv.boundingRect(contorno);
                         deteccoesAtuais.push(retangulo); 
                     }
                 }
 
-                // Envia para o rastreador
+                // 6. Rastreamento temporal (Line Crossing)
                 logicaRastreamentoEContagem(deteccoesAtuais);
 
-                // Mostra a imagem na tela. Se o modo Depuração estiver ligado, mostra a visão da máquina em vez do vídeo
+                // 7. Renderização na Tela
+                // Se a depuração estiver ligada, mostramos o mundo em Preto e Branco
                 if(chkDepuracao.checked) {
                     cv.imshow('saidaCanvas', thresholded);
                 } else {
-                    cv.imshow('saidaCanvas', src);
+                    cv.imshow('saidaCanvas', src); // Mostra o vídeo original colorido
                 }
                 
+                // Por cima da imagem (seja a real ou a máscara), desenhamos as caixas e a linha vermelha
                 desenharInterface(deteccoesAtuais);
 
             } catch (err) {
@@ -250,12 +258,14 @@
             let objetosAtualizados = new Map();
 
             caixasDetectadas.forEach(caixa => {
+                // Calcula o ponto exato do meio do objeto
                 let centroX = caixa.x + (caixa.width / 2);
                 let centroY = caixa.y + (caixa.height / 2);
                 
                 let melhorID = -1;
                 let menorDistancia = DISTANCIA_MAX_RASTREAMENTO;
 
+                // Compara a posição atual com as posições dos objetos no frame anterior (Centroid Tracking)
                 for (let [id, posAntiga] of objetosRastreados.entries()) {
                     let distancia = Math.hypot(centroX - posAntiga.x, centroY - posAntiga.y);
                     if (distancia < menorDistancia) {
@@ -265,41 +275,55 @@
                 }
 
                 if (melhorID !== -1) {
+                    // É um objeto que já estávamos acompanhando!
                     let posAntiga = objetosRastreados.get(melhorID);
+                    
+                    // GATILHO DA LINHA VIRTUAL:
+                    // Se ele estava à esquerda da linha (t-1) e agora está à direita (t)
                     if (posAntiga.x < LINHA_X && centroX >= LINHA_X) {
                         totalPecas++;
                         elemContador.innerText = totalPecas;
-                        isFlashAtivo = 15;
+                        isFlashAtivo = 15; // Mantém a linha brilhando por 15 frames
                     }
+                    
+                    // Atualiza a nova posição na memória
                     objetosAtualizados.set(melhorID, { x: centroX, y: centroY });
+                    // Remove da lista antiga para evitar processamento duplicado
                     objetosRastreados.delete(melhorID); 
                 } else {
+                    // Se não encontrou histórico próximo, é uma peça nova surgindo na tela
                     objetosAtualizados.set(proximoID, { x: centroX, y: centroY });
                     proximoID++;
                 }
             });
 
+            // Atualiza a memória de curto prazo para o próximo frame
             objetosRastreados = objetosAtualizados;
         }
 
         function desenharInterface(caixasDetectadas) {
+            // Desenha a Linha de Cruzamento no meio da tela
             ctx.beginPath();
             ctx.moveTo(LINHA_X, 0);
             ctx.lineTo(LINHA_X, ALTURA);
             ctx.lineWidth = 4;
             
             if (isFlashAtivo > 0) {
+                // Flash visual de sucesso (Linha Branca com brilho Verde)
                 ctx.strokeStyle = '#FFFFFF'; ctx.shadowBlur = 20; ctx.shadowColor = '#00FF66';
                 isFlashAtivo--;
             } else {
+                // Estado normal de aguardo (Linha Vermelha sem brilho)
                 ctx.strokeStyle = '#FF0000'; ctx.shadowBlur = 0;
             }
             ctx.stroke(); ctx.shadowBlur = 0;
 
+            // Desenha as Caixas de Tracking sobre as peças
             caixasDetectadas.forEach(caixa => {
                 ctx.strokeStyle = '#00FF66'; ctx.lineWidth = 2;
                 ctx.strokeRect(caixa.x, caixa.y, caixa.width, caixa.height);
                 
+                // Desenha o pontinho central (o que realmente atravessa a linha matemática)
                 ctx.fillStyle = '#00FF66';
                 let cx = caixa.x + caixa.width / 2; let cy = caixa.y + caixa.height / 2;
                 ctx.fillRect(cx - 3, cy - 3, 6, 6);

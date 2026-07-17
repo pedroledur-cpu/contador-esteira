@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Contador de Esteira - OpenCV Corrigido</title>
+    <title>Contador de Esteira - Limiar Absoluto</title>
     
     <!-- Importando o OpenCV.js -->
     <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
@@ -24,8 +24,13 @@
             background: #1e1e1e; padding: 15px; border-radius: 8px; margin-bottom: 15px; width: 90%; max-width: 610px;
             display: flex; flex-direction: column; gap: 10px; font-size: 14px;
         }
-        .linha-controle { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+        .linha-controle { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; margin-bottom: 5px;}
         input[type=range] { width: 150px; }
+
+        .checkbox-container { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+        .btn-acao { padding: 8px 15px; background: #333; color: white; border: 1px solid #555; border-radius: 4px; cursor: pointer; transition: 0.2s;}
+        .btn-acao:hover { background: #555; }
+        .btn-acao.ativo { background: #007bff; border-color: #007bff; }
 
         #container-video { 
             position: relative; width: 100%; max-width: 640px; aspect-ratio: 4/3; background: #000; 
@@ -47,24 +52,34 @@
     </div>
 
     <div id="controles">
+        <!-- CONTROLES DO NOVO MOTOR DE THRESHOLD -->
         <div class="linha-controle">
-            <label for="filtroArea" title="Tamanho mínimo em pixels para considerar como uma peça válida.">Área Mínima da Peça: <span id="valArea">3000</span> px</label>
+            <label for="limiarCorte" title="Tons de cinza. Move para isolar a peça do fundo.">Nota de Corte do Contraste (Limiar): <span id="valLimiar">100</span></label>
+            <input type="range" id="limiarCorte" min="10" max="240" value="100" step="1">
+        </div>
+        
+        <div class="linha-controle">
+            <label title="A esteira é clara e a peça escura, ou vice-versa?">Inverter Cores (Peça vs Fundo):</label>
+            <button id="btnInverter" class="btn-acao ativo">Peça Escura no Fundo Claro</button>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid #444; width: 100%; margin: 5px 0;">
+
+        <!-- CONTROLES ANTIGOS DE TAMANHO E POSIÇÃO -->
+        <div class="linha-controle">
+            <label for="filtroArea">Tamanho Mínimo da Peça (Pixels): <span id="valArea">3000</span> px</label>
             <input type="range" id="filtroArea" min="100" max="15000" value="3000" step="100">
         </div>
+        
         <div class="linha-controle">
-            <label for="sensibilidade" title="Valores maiores ignoram mais o fundo.">Sensibilidade MOG2: <span id="valSensibilidade">25</span></label>
-            <input type="range" id="sensibilidade" min="10" max="150" value="25" step="5">
+            <label title="Para ver o que o OpenCV está enxergando por baixo dos panos.">Modo de Depuração (Máscara P&B):</label>
+            <label class="checkbox-container">
+                <input type="checkbox" id="chkDepuracao"> Mostrar Máscara de Contraste
+            </label>
         </div>
-        <div class="linha-controle">
-            <label for="erosao" title="Aumente para separar peças que passam muito próximas umas das outras.">Força de Separação (Erosão): <span id="valErosao">3</span></label>
-            <input type="range" id="erosao" min="1" max="15" value="3" step="2">
-        </div>
-        <div style="text-align: center; margin-top: 10px; display: flex; gap: 10px; justify-content: center;">
-            <button id="btnAplicar" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Aplicar Mudanças no Fundo</button>
+
+        <div style="text-align: center; margin-top: 10px;">
             <button onclick="resetarContagem()" style="padding: 10px 20px; background: #b3261e; color: white; border: none; border-radius: 4px; cursor: pointer;">Zerar Contador</button>
-        </div>
-        <div style="font-size: 11px; color: #888; text-align: center; margin-top: 5px;">
-            Aviso: Alterar a Sensibilidade reinicia a memória de fundo da câmera.
         </div>
     </div>
 
@@ -79,48 +94,50 @@
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         const elemContador = document.getElementById('contador');
         
+        const sliderLimiar = document.getElementById('limiarCorte');
+        const displayLimiar = document.getElementById('valLimiar');
         const sliderArea = document.getElementById('filtroArea');
         const displayArea = document.getElementById('valArea');
-        const sliderSensibilidade = document.getElementById('sensibilidade');
-        const displaySensibilidade = document.getElementById('valSensibilidade');
-        const sliderErosao = document.getElementById('erosao');
-        const displayErosao = document.getElementById('valErosao');
-        const btnAplicar = document.getElementById('btnAplicar');
+        
+        const btnInverter = document.getElementById('btnInverter');
+        const chkDepuracao = document.getElementById('chkDepuracao');
 
-        // Configuração de Tela (Usamos 640x480 fixos internamente para o OpenCV para manter o FPS alto)
         const LARGURA = 640;
         const ALTURA = 480;
         const LINHA_X = LARGURA / 2; 
 
-        // Variáveis de Estado
         let totalPecas = 0;
         let isFlashAtivo = 0; 
-        let openCvPronto = false;
         let processamentoRodando = false;
         
         // Rastreamento
         let objetosRastreados = new Map(); 
         let proximoID = 1;
         const DISTANCIA_MAX_RASTREAMENTO = 150; 
-
-        // Objetos C++ do OpenCV guardados no JS
-        let cap = null;
-        let src = null;
-        let fgmask = null;
-        let fgbg = null;
-        let contornos = null;
-        let hierarquia = null;
-
-        // Sliders atualizam o display de texto em tempo real
-        sliderArea.oninput = function() { displayArea.innerText = this.value; }
-        sliderSensibilidade.oninput = function() { displaySensibilidade.innerText = this.value; }
-        sliderErosao.oninput = function() { displayErosao.innerText = this.value; }
         
+        // Estado do Filtro
+        let pecaEscura = true; // Por padrão, procura peças escuras (Inv Threshold)
+
+        sliderLimiar.oninput = function() { displayLimiar.innerText = this.value; }
+        sliderArea.oninput = function() { displayArea.innerText = this.value; }
+        
+        btnInverter.onclick = function() {
+            pecaEscura = !pecaEscura;
+            if(pecaEscura) {
+                this.className = "btn-acao ativo";
+                this.innerText = "Peça Escura no Fundo Claro";
+            } else {
+                this.className = "btn-acao";
+                this.innerText = "Peça Clara no Fundo Escuro";
+            }
+        };
+
         function resetarContagem() { totalPecas = 0; elemContador.innerText = totalPecas; }
 
+        // Objetos de matriz que ficarão vivos na memória
+        let cap, src, gray, blur, thresholded, hierarquia, contornos;
+
         function onOpenCvReady() {
-            // Essa função é chamada pelo evento 'onload' da tag script do OpenCV
-            openCvPronto = true;
             document.getElementById('status').innerText = "OpenCV Carregado! Permitindo acesso à câmera...";
             document.getElementById('status').style.color = "#00FF66";
             iniciarCamera();
@@ -128,145 +145,104 @@
 
         async function iniciarCamera() {
             try {
-                // Solicita câmera traseira do tablet
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { 
-                        facingMode: { ideal: 'environment' }, 
-                        width: { ideal: LARGURA }, 
-                        height: { ideal: ALTURA } 
-                    }
+                    video: { facingMode: { ideal: 'environment' }, width: { ideal: LARGURA }, height: { ideal: ALTURA } }
                 });
                 video.srcObject = stream;
 
                 video.onloadeddata = () => {
-                    // Força largura e altura no elemento de vídeo e no canvas para alinhar a matriz do OpenCV
-                    video.width = LARGURA;
-                    video.height = ALTURA;
-                    canvas.width = LARGURA;
-                    canvas.height = ALTURA;
-
-                    document.getElementById('status').innerText = "Câmera ativa! Subtraindo fundo...";
-                    if (!processamentoRodando) {
-                        prepararOpenCV();
-                    }
+                    video.width = LARGURA; video.height = ALTURA;
+                    canvas.width = LARGURA; canvas.height = ALTURA;
+                    document.getElementById('status').innerText = "Câmera ativa! Ajuste o Limiar de Contraste.";
+                    if (!processamentoRodando) prepararOpenCV();
                 };
             } catch (erro) {
-                document.getElementById('status').innerText = "Erro na câmera. Verifique se o link tem HTTPS (cadeado). Erro: " + erro.message;
+                document.getElementById('status').innerText = "Erro na câmera: " + erro.message;
                 document.getElementById('status').style.color = "#b3261e";
             }
         }
 
         function prepararOpenCV() {
             if (!cv || !cv.Mat) {
-                setTimeout(prepararOpenCV, 100); // Aguarda o OpenCV terminar de instanciar internamente
+                setTimeout(prepararOpenCV, 100);
                 return;
             }
 
-            // Aloca a memória das matrizes de imagem apenas uma vez
+            // Aloca a memória das matrizes apenas uma vez para o novo algoritmo
             src = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC4);
-            fgmask = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC1);
-            contornos = new cv.MatVector();
+            gray = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC1);
+            blur = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC1);
+            thresholded = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC1);
+            
             hierarquia = new cv.Mat();
-
-            criarSubtratorDeFundo(); // Cria a instância MOG2 com a sensibilidade atual do slider
+            contornos = new cv.MatVector();
 
             cap = new cv.VideoCapture(video);
             
-            // Registra que já está rodando para não criar múltiplos loops se a câmera reiniciar
             processamentoRodando = true;
-            document.getElementById('status').style.display = 'none'; // Esconde o aviso de carregamento
+            document.getElementById('status').style.display = 'none';
 
             requestAnimationFrame(processarVideo);
         }
-
-        function criarSubtratorDeFundo() {
-            // Se já existir um, nós o deletamos da memória para evitar Memory Leak (vazamento de RAM no navegador)
-            if (fgbg != null) {
-                fgbg.delete();
-            }
-            
-            let sensibilidade = parseInt(sliderSensibilidade.value);
-            
-            // createBackgroundSubtractorMOG2(history, varThreshold, detectShadows)
-            // history: Quantos frames passados ele lembra.
-            // varThreshold: A nossa "Sensibilidade". Quanto maior, mais diferença ele exige para considerar "movimento".
-            // detectShadows: false. Sombras costumam confundir a contagem. É melhor ignorá-las no cálculo.
-            fgbg = new cv.BackgroundSubtractorMOG2(500, sensibilidade, false);
-            console.log("MOG2 Recriado com Sensibilidade (Threshold):", sensibilidade);
-        }
-
-        // Evento do botão Aplicar para mudar a sensibilidade sem o erro de 'setVarThreshold'
-        btnAplicar.onclick = () => {
-            if (openCvPronto && processamentoRodando) {
-                criarSubtratorDeFundo();
-                document.getElementById('status').style.display = 'block';
-                document.getElementById('status').innerText = "Fundo reiniciado com a nova sensibilidade.";
-                setTimeout(() => { document.getElementById('status').style.display = 'none'; }, 3000);
-            }
-        };
 
         function processarVideo() {
             if (!processamentoRodando) return;
 
             try {
-                // Lê o quadro atual do vídeo para a matriz 'src'
+                // 1. Lê a imagem da câmera
                 cap.read(src);
                 
-                // Aplica a subtração de fundo
-                fgbg.apply(src, fgmask);
+                // 2. Converte para Preto e Branco puros (Tons de cinza)
+                cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+                
+                // 3. Aplica um "Borrão" fortíssimo para sumir com ranhuras, fios e sujeira da esteira
+                // O kernel (21,21) é grande, suaviza tudo. A peça grande sobrevive.
+                let ksize = new cv.Size(21, 21);
+                cv.GaussianBlur(gray, blur, ksize, 0, 0, cv.BORDER_DEFAULT);
 
-                // --- FILTROS DE LIMPEZA (MORFOLOGIA) ---
-                // Para consertar peças que grudam e marcas na lona
-                let kernelSizeErosao = parseInt(sliderErosao.value);
-                // Matrizes de convolução precisam ter tamanhos ímpares no OpenCV
-                if (kernelSizeErosao % 2 === 0) kernelSizeErosao++; 
+                // 4. O Coração do Código: O Gatilho do Limiar (Threshold)
+                let valorLimiar = parseInt(sliderLimiar.value);
                 
-                // Elemento kernel estruturante (como se fosse um pincel para limpar os pixels)
-                let elemento = cv.Mat.ones(kernelSizeErosao, kernelSizeErosao, cv.CV_8U);
+                // O OpenCV espera binarizar a imagem (deixar 100% branca ou 100% preta).
+                // cv.THRESH_BINARY_INV : Para Peças Escuras na lona clara (A lona vira preto, a peça vira branco)
+                // cv.THRESH_BINARY : Para Peças Claras na lona escura (A peça brilha em branco)
+                let tipoThreshold = pecaEscura ? cv.THRESH_BINARY_INV : cv.THRESH_BINARY;
                 
-                // 1. MORPH_OPEN (Erosão seguida de dilatação) - Remove manchas isoladas de sujeira e sujeira entre peças coladas
-                cv.morphologyEx(fgmask, fgmask, cv.MORPH_OPEN, elemento);
-                
-                // 2. MORPH_CLOSE (Dilatação seguida de erosão) - Tapa buracos escuros "dentro" do corpo branco da peça
-                // Usa um kernel levemente maior para garantir que feche buracos grandes no meio da peça
-                let elementoClose = cv.Mat.ones(kernelSizeErosao + 4, kernelSizeErosao + 4, cv.CV_8U);
-                cv.morphologyEx(fgmask, fgmask, cv.MORPH_CLOSE, elementoClose);
-                
-                // Limpa memória dos elementos temporários a cada frame!
-                elemento.delete();
-                elementoClose.delete();
+                // TUDO que for "maior ou menor" que a nota de corte (valorLimiar) vira 255 (Branco intenso). O resto morre em 0 (Preto).
+                cv.threshold(blur, thresholded, valorLimiar, 255, tipoThreshold);
 
-                // Busca os contornos dos objetos brancos na tela
-                cv.findContours(fgmask, contornos, hierarquia, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+                // 5. Encontra os Contornos no bololô branco que sobrou
+                cv.findContours(thresholded, contornos, hierarquia, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
                 let deteccoesAtuais = [];
                 let areaMinima = parseInt(sliderArea.value);
 
-                // Analisa todos os agrupamentos brancos encontrados
                 for (let i = 0; i < contornos.size(); ++i) {
                     let contorno = contornos.get(i);
                     let area = cv.contourArea(contorno);
                     
-                    // Se o objeto for maior que o limite configurado no slider
                     if (area > areaMinima) {
                         let retangulo = cv.boundingRect(contorno);
                         deteccoesAtuais.push(retangulo); 
                     }
                 }
 
+                // Envia para o rastreador
                 logicaRastreamentoEContagem(deteccoesAtuais);
 
-                // Mostramos a imagem original capturada na câmera em vez da máscara preta e branca
-                cv.imshow('saidaCanvas', src);
+                // Mostra a imagem na tela. Se o modo Depuração estiver ligado, mostra a visão da máquina em vez do vídeo
+                if(chkDepuracao.checked) {
+                    cv.imshow('saidaCanvas', thresholded);
+                } else {
+                    cv.imshow('saidaCanvas', src);
+                }
                 
-                // E desenhamos nossas anotações e a linha de corte por cima da imagem
                 desenharInterface(deteccoesAtuais);
 
             } catch (err) {
                 console.error("Erro no processamento:", err);
             }
 
-            // Repete o ciclo no próximo frame de tela livre
             requestAnimationFrame(processarVideo);
         }
 
@@ -274,16 +250,13 @@
             let objetosAtualizados = new Map();
 
             caixasDetectadas.forEach(caixa => {
-                // Descobre o ponto central do objeto
                 let centroX = caixa.x + (caixa.width / 2);
                 let centroY = caixa.y + (caixa.height / 2);
                 
                 let melhorID = -1;
                 let menorDistancia = DISTANCIA_MAX_RASTREAMENTO;
 
-                // Tenta parear esse objeto com as caixas que estavam na tela no frame anterior
                 for (let [id, posAntiga] of objetosRastreados.entries()) {
-                    // Cálculo de distância geométrica entre dois pontos
                     let distancia = Math.hypot(centroX - posAntiga.x, centroY - posAntiga.y);
                     if (distancia < menorDistancia) {
                         menorDistancia = distancia;
@@ -292,63 +265,43 @@
                 }
 
                 if (melhorID !== -1) {
-                    // Nós sabemos quem é essa peça (Achou um ID passado)
                     let posAntiga = objetosRastreados.get(melhorID);
-                    
-                    // --- O GRANDE GATILHO DA LINHA ---
-                    // Se no frame passado o X dele era menor que a linha, e AGORA é maior ou igual...
                     if (posAntiga.x < LINHA_X && centroX >= LINHA_X) {
                         totalPecas++;
                         elemContador.innerText = totalPecas;
-                        isFlashAtivo = 15; // Ativa a cor verde neon por alguns frames
+                        isFlashAtivo = 15;
                     }
-
-                    // Guarda a posição atual para o próximo frame
                     objetosAtualizados.set(melhorID, { x: centroX, y: centroY });
-                    // Remove do mapa velho para garantir que não pareie a mesma peça velha duas vezes
                     objetosRastreados.delete(melhorID); 
                 } else {
-                    // É uma peça nova que acabou de entrar na visão da câmera
                     objetosAtualizados.set(proximoID, { x: centroX, y: centroY });
                     proximoID++;
                 }
             });
 
-            // Atualiza a memória global
             objetosRastreados = objetosAtualizados;
         }
 
         function desenharInterface(caixasDetectadas) {
-            // Desenha a linha virtual de cruzamento no Canvas 2D
             ctx.beginPath();
             ctx.moveTo(LINHA_X, 0);
             ctx.lineTo(LINHA_X, ALTURA);
             ctx.lineWidth = 4;
             
             if (isFlashAtivo > 0) {
-                // A peça cruzou a linha! Pisca verde brilhante.
-                ctx.strokeStyle = '#FFFFFF';
-                ctx.shadowBlur = 20;
-                ctx.shadowColor = '#00FF66';
+                ctx.strokeStyle = '#FFFFFF'; ctx.shadowBlur = 20; ctx.shadowColor = '#00FF66';
                 isFlashAtivo--;
             } else {
-                // Repouso: Linha vermelha
-                ctx.strokeStyle = '#FF0000';
-                ctx.shadowBlur = 0;
+                ctx.strokeStyle = '#FF0000'; ctx.shadowBlur = 0;
             }
-            ctx.stroke();
-            ctx.shadowBlur = 0;
+            ctx.stroke(); ctx.shadowBlur = 0;
 
-            // Desenha os retângulos verdes nas peças encontradas
             caixasDetectadas.forEach(caixa => {
-                ctx.strokeStyle = '#00FF66';
-                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#00FF66'; ctx.lineWidth = 2;
                 ctx.strokeRect(caixa.x, caixa.y, caixa.width, caixa.height);
                 
-                // Pontinho do centro exato
                 ctx.fillStyle = '#00FF66';
-                let cx = caixa.x + caixa.width / 2;
-                let cy = caixa.y + caixa.height / 2;
+                let cx = caixa.x + caixa.width / 2; let cy = caixa.y + caixa.height / 2;
                 ctx.fillRect(cx - 3, cy - 3, 6, 6);
             });
         }

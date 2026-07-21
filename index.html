@@ -1,334 +1,429 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-PT">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Contador de Esteira - Limiar Absoluto</title>
-    
-    <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
-
+    <title>Contador Universal de Esteira (Agnóstico)</title>
     <style>
-        body { 
-            margin: 0; background: #121212; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; 
-        }
-        #painel { 
-            background: #1e1e1e; padding: 15px 30px; border-radius: 12px; margin-bottom: 15px; 
-            border-left: 6px solid #00FF66; display: flex; gap: 20px; align-items: center; 
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5); z-index: 10;
-        }
-        #contador { font-size: 42px; font-weight: bold; color: #00FF66; font-family: monospace; }
+        body { margin: 0; background: #0f172a; color: #f8fafc; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .header { background: #1e293b; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; }
+        .contador-display { background: #000; border: 2px solid #38bdf8; padding: 10px 25px; border-radius: 8px; font-size: 32px; font-weight: bold; color: #38bdf8; box-shadow: 0 0 15px rgba(56, 189, 248, 0.2); }
+        .main-container { display: flex; flex-direction: column; align-items: center; padding: 20px; gap: 20px; }
+        .video-wrapper { position: relative; width: 640px; height: 480px; background: #000; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.6); border: 1px solid #334155; }
+        video, canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        /* O canvas de debug fica escondido por padrão, ativado pelo botão */
+        #canvasDebug { display: none; filter: grayscale(100%) contrast(300%); opacity: 0.8; z-index: 5; }
+        #canvasSaida { z-index: 10; }
+        .painel-controles { background: #1e293b; padding: 25px; border-radius: 12px; width: 640px; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px; border: 1px solid #334155; }
         
-        #controles {
-            background: #1e1e1e; padding: 15px; border-radius: 8px; margin-bottom: 15px; width: 90%; max-width: 610px;
-            display: flex; flex-direction: column; gap: 10px; font-size: 14px;
-        }
-        .linha-controle { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; margin-bottom: 5px;}
-        input[type=range] { width: 150px; }
-
-        .checkbox-container { display: flex; align-items: center; gap: 10px; cursor: pointer; }
-        .btn-acao { padding: 8px 15px; background: #333; color: white; border: 1px solid #555; border-radius: 4px; cursor: pointer; transition: 0.2s; font-weight: bold;}
-        .btn-acao:hover { background: #555; }
-        .btn-acao.ativo { background: #007bff; border-color: #007bff; color: white;}
-
-        #container-video { 
-            position: relative; width: 100%; max-width: 640px; aspect-ratio: 4/3; background: #000; 
-            border-radius: 8px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.8); 
-        }
-        video { display: none; } /* Ocultamos o vídeo original, mostramos apenas o canvas com OpenCV */
-        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
+        .secao-controle { display: flex; flex-direction: column; gap: 8px; background: #0f172a; padding: 15px; border-radius: 8px; border: 1px solid #1e293b; }
+        .secao-titulo { font-size: 14px; font-weight: 600; color: #94a3b8; text-transform: uppercase; margin-bottom: 5px; }
         
-        #status { margin-bottom: 10px; font-weight: bold; color: #FFA500; text-align: center; padding: 0 10px; }
+        input[type="range"] { width: 100%; height: 6px; background: #334155; border-radius: 3px; outline: none; -webkit-appearance: none; }
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #38bdf8; cursor: pointer; }
+        
+        .valor-display { float: right; color: #38bdf8; font-family: monospace; font-size: 16px; font-weight: bold; }
+        
+        .btn-group { display: flex; gap: 10px; margin-top: 10px; }
+        button { flex: 1; background: #2563eb; color: white; border: none; padding: 14px; border-radius: 8px; font-size: 15px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
+        button:hover { background: #1d4ed8; }
+        button.btn-secundario { background: #475569; }
+        button.btn-secundario:hover { background: #334155; }
+        button.active { background: #059669; box-shadow: 0 0 10px rgba(5, 150, 105, 0.5); }
+        
+        #avisoAcesso { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: #94a3b8; z-index: 1; width: 80%; }
     </style>
 </head>
 <body>
 
-    <div id="status">Baixando motor OpenCV (~8MB). Isso pode levar alguns segundos...</div>
-    
-    <div id="painel">
-        <div>PEÇAS CONTADAS:</div>
-        <div id="contador">0</div>
+    <div class="header">
+        <h2>Contador Universal (Fluxo Ótico)</h2>
+        <div class="contador-display">PEÇAS: <span id="contadorVal">0</span></div>
     </div>
 
-    <div id="controles">
-        <!-- Controles da Binarização Absoluta -->
-        <div class="linha-controle">
-            <label for="limiarCorte" title="Move para isolar a peça do fundo.">Nota de Corte do Contraste: <span id="valLimiar">100</span></label>
-            <input type="range" id="limiarCorte" min="10" max="240" value="100" step="1">
-        </div>
-        
-        <div class="linha-controle">
-            <label title="A esteira é clara e a peça escura, ou vice-versa?">Configuração da Cor (Inversão):</label>
-            <button id="btnInverter" class="btn-acao ativo">Peça Escura no Fundo Claro</button>
-        </div>
-
-        <hr style="border: 0; border-top: 1px solid #444; width: 100%; margin: 5px 0;">
-
-        <!-- Controles de Filtro e Depuração -->
-        <div class="linha-controle">
-            <label for="filtroArea">Tamanho Mínimo da Peça (Ruído): <span id="valArea">3000</span> px</label>
-            <input type="range" id="filtroArea" min="100" max="25000" value="3000" step="100">
-        </div>
-        
-        <div class="linha-controle">
-            <label title="Ligue para regular a Nota de Corte perfeitamente.">Visão da Máquina (Binarização):</label>
-            <label class="checkbox-container">
-                <input type="checkbox" id="chkDepuracao"> Mostrar Máscara de Contraste
-            </label>
+    <div class="main-container">
+        <div class="video-wrapper">
+            <div id="avisoAcesso">A aguardar acesso à câmara...<br><small>(Certifique-se de usar HTTPS)</small></div>
+            <!-- Ocultamos o vídeo original pois vamos processá-lo via Canvas -->
+            <video id="webcam" autoplay playsinline muted style="display: none;"></video>
+            
+            <!-- Canvas 1: Processamento de Diferença (escondido) -->
+            <canvas id="canvasProcessamento" width="640" height="480" style="display: none;"></canvas>
+            
+            <!-- Canvas 2: Visualização da Máscara de Movimento -->
+            <canvas id="canvasDebug" width="640" height="480"></canvas>
+            
+            <!-- Canvas 3: Visualização Final (Onde as caixas e a linha aparecem) -->
+            <canvas id="canvasSaida" width="640" height="480"></canvas>
         </div>
 
-        <div style="text-align: center; margin-top: 10px;">
-            <button onclick="resetarContagem()" style="padding: 10px 20px; background: #b3261e; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Zerar Contador</button>
-        </div>
-    </div>
+        <div class="painel-controles">
+            <p style="margin: 0; color: #94a3b8; font-size: 14px;">
+                Este sistema não usa IA. Ele calcula a <strong>diferença de pixels em movimento</strong> entre o frame atual e o anterior. Ideal para ignorar cores de esteira e contar qualquer peça que se mova.
+            </p>
 
-    <div id="container-video">
-        <video id="webcam" autoplay playsinline muted width="640" height="480"></video>
-        <!-- O OpenCV vai desenhar os frames diretamente neste canvas -->
-        <canvas id="saidaCanvas" width="640" height="480"></canvas>
+            <div class="secao-controle">
+                <div class="secao-titulo">1. Sensibilidade ao Movimento</div>
+                <label style="color: #cbd5e1; font-size: 14px;">O que é "movimento"? (Menos = mais sensível) <span id="lblThreshold" class="valor-display">30</span></label>
+                <!-- Menor detecta peças com contraste quase nulo se movendo, mas pega ruído -->
+                <input type="range" id="slThreshold" min="5" max="100" step="1" value="30">
+            </div>
+
+            <div class="secao-controle">
+                <div class="secao-titulo">2. Ignorar Poeira (Ruído)</div>
+                <label style="color: #cbd5e1; font-size: 14px;">Tamanho mínimo do bloco em movimento <span id="lblMinArea" class="valor-display">800</span></label>
+                <!-- Evita que um grão de poeira ou reflexo passe pela linha e conte -->
+                <input type="range" id="slMinArea" min="50" max="5000" step="50" value="800">
+            </div>
+            
+            <div class="secao-controle">
+                <div class="secao-titulo">3. Agrupamento (Peças Juntas)</div>
+                <label style="color: #cbd5e1; font-size: 14px;">Distância para unir peças quebradas <span id="lblDilate" class="valor-display">15</span></label>
+                <!-- Se uma engrenagem tem buracos, o movimento pode separar em 2 peças. Isso junta elas. -->
+                <input type="range" id="slDilate" min="1" max="50" step="1" value="15">
+            </div>
+
+            <div class="btn-group">
+                <button id="btnDebug" class="btn-secundario">Ver Máscara de Movimento (Calibrar)</button>
+                <button id="btnReset" class="btn-secundario">Zerar Contador</button>
+            </div>
+        </div>
     </div>
 
     <script>
         const video = document.getElementById('webcam');
-        const canvas = document.getElementById('saidaCanvas');
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        const elemContador = document.getElementById('contador');
+        const cvsProc = document.getElementById('canvasProcessamento');
+        const ctxProc = cvsProc.getContext('2d', { willReadFrequently: true });
         
-        const sliderLimiar = document.getElementById('limiarCorte');
-        const displayLimiar = document.getElementById('valLimiar');
-        const sliderArea = document.getElementById('filtroArea');
-        const displayArea = document.getElementById('valArea');
+        const cvsDebug = document.getElementById('canvasDebug');
+        const ctxDebug = cvsDebug.getContext('2d');
         
-        const btnInverter = document.getElementById('btnInverter');
-        const chkDepuracao = document.getElementById('chkDepuracao');
+        const cvsSaida = document.getElementById('canvasSaida');
+        const ctxSaida = cvsSaida.getContext('2d');
+        
+        const LINHA_X = 320;
+        let contador = 0;
+        let isDebugAtivo = false;
+        
+        // Memória do frame anterior para comparar
+        let frameAnterior = null;
 
-        const LARGURA = 640;
-        const ALTURA = 480;
-        // A linha virtual ficará exatamente no meio da tela
-        const LINHA_X = LARGURA / 2; 
-
-        let totalPecas = 0;
-        let isFlashAtivo = 0; 
-        let processamentoRodando = false;
-        
-        // Memória de Rastreamento (Tracking)
-        let objetosRastreados = new Map(); 
+        // Sistema de Tracking Próprio (Centroid Tracker Simples)
+        let rastreadoresAtivos = [];
         let proximoID = 1;
-        const DISTANCIA_MAX_RASTREAMENTO = 150; 
-        
-        // Estado do Filtro: Por padrão, a IA busca objetos brancos no fundo preto.
-        // Se a esteira for clara e a peça escura, precisamos inverter a imagem.
-        let pecaEscura = true; 
+        const MAX_DISTANCIA_TRACKING = 100; 
+        const MAX_FRAMES_INVISIVEL = 5;
 
-        sliderLimiar.oninput = function() { displayLimiar.innerText = this.value; }
-        sliderArea.oninput = function() { displayArea.innerText = this.value; }
-        
-        btnInverter.onclick = function() {
-            pecaEscura = !pecaEscura;
-            if(pecaEscura) {
-                this.className = "btn-acao ativo";
-                this.innerText = "Peça Escura no Fundo Claro";
-            } else {
-                this.className = "btn-acao";
-                this.innerText = "Peça Clara no Fundo Escuro";
-            }
-        };
-
-        function resetarContagem() { totalPecas = 0; elemContador.innerText = totalPecas; }
-
-        // Variáveis globais do OpenCV para evitar vazamento de memória (Memory Leak)
-        let cap, src, gray, blur, thresholded, hierarquia, contornos;
-
-        function onOpenCvReady() {
-            document.getElementById('status').innerText = "OpenCV Carregado! Solicitando câmera...";
-            document.getElementById('status').style.color = "#00FF66";
-            iniciarCamera();
-        }
-
+        // INICIALIZAÇÃO DA CÂMERA
         async function iniciarCamera() {
             try {
-                // Solicita a câmera traseira do tablet (environment)
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: { ideal: 'environment' }, width: { ideal: LARGURA }, height: { ideal: ALTURA } }
+                    video: { facingMode: 'environment', width: 640, height: 480 }
                 });
                 video.srcObject = stream;
-
-                video.onloadeddata = () => {
-                    video.width = LARGURA; video.height = ALTURA;
-                    canvas.width = LARGURA; canvas.height = ALTURA;
-                    document.getElementById('status').innerText = "Câmera ativa! Ajuste a Máscara e a Nota de Corte.";
-                    if (!processamentoRodando) prepararOpenCV();
-                };
-            } catch (erro) {
-                document.getElementById('status').innerText = "Erro na câmera: " + erro.message;
-                document.getElementById('status').style.color = "#b3261e";
+                
+                video.addEventListener('playing', () => {
+                    document.getElementById('avisoAcesso').style.display = 'none';
+                    // Aguarda o vídeo ter largura para começar
+                    verificarDimensoes();
+                });
+            } catch (err) {
+                document.getElementById('avisoAcesso').innerHTML = "Erro ao acessar a câmara.<br><small style='color:#ef4444'>" + err.message + "</small>";
             }
         }
 
-        function prepararOpenCV() {
-            if (!cv || !cv.Mat) {
-                setTimeout(prepararOpenCV, 100); // Aguarda inicialização completa
+        function verificarDimensoes() {
+            if (video.videoWidth > 0) {
+                // Inicia o loop apenas quando tiver o frame real
+                requestAnimationFrame(loopPrincipal);
+            } else {
+                setTimeout(verificarDimensoes, 100);
+            }
+        }
+
+        // LOOP PRINCIPAL (RODA A 30 FPS)
+        function loopPrincipal() {
+            // Desenha o vídeo atual no canvas de processamento
+            ctxProc.drawImage(video, 0, 0, 640, 480);
+            
+            // Pega os pixels do frame atual
+            let frameAtualImgData = ctxProc.getImageData(0, 0, 640, 480);
+            let pixelsAtuais = frameAtualImgData.data;
+
+            // Se for o primeiro frame, apenas guarda na memória e pula
+            if (!frameAnterior) {
+                // Cria a estrutura do frame anterior
+                frameAnterior = new Uint8ClampedArray(pixelsAtuais.length);
+                frameAnterior.set(pixelsAtuais);
+                requestAnimationFrame(loopPrincipal);
                 return;
             }
 
-            // Aloca a memória das matrizes apenas UMA vez para economizar bateria e CPU
-            src = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC4);
-            gray = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC1);
-            blur = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC1);
-            thresholded = new cv.Mat(ALTURA, LARGURA, cv.CV_8UC1);
+            // --- 1. MATEMÁTICA DA DIFERENÇA DE FRAMES ---
             
-            hierarquia = new cv.Mat();
-            contornos = new cv.MatVector();
-
-            // Linka a tag <video> ao motor do OpenCV
-            cap = new cv.VideoCapture(video);
+            let threshold = parseInt(document.getElementById('slThreshold').value);
             
-            processamentoRodando = true;
-            document.getElementById('status').style.display = 'none';
+            // Criamos uma imagem vazia (preta) para guardar o "movimento"
+            let imagemMovimento = ctxProc.createImageData(640, 480);
+            let pixelsMovimento = imagemMovimento.data;
 
-            // Inicia o laço infinito
-            requestAnimationFrame(processarVideo);
-        }
+            // Variável para guardar caixas de movimento bruto antes do agrupamento
+            let pixelsAtivos = []; // Array de [x, y]
 
-        function processarVideo() {
-            if (!processamentoRodando) return;
-
-            try {
-                // 1. Captura o frame atual da câmera
-                cap.read(src);
+            for (let i = 0; i < pixelsAtuais.length; i += 4) {
+                // Convertemos o pixel atual e o antigo para escala de cinza de forma rápida
+                // Usando a fórmula aproximada de luminosidade: Y = 0.299R + 0.587G + 0.114B
+                let lumaAtual = (pixelsAtuais[i] * 0.299) + (pixelsAtuais[i+1] * 0.587) + (pixelsAtuais[i+2] * 0.114);
+                let lumaAntigo = (frameAnterior[i] * 0.299) + (frameAnterior[i+1] * 0.587) + (frameAnterior[i+2] * 0.114);
                 
-                // 2. Converte para tons de cinza (descarta a cor)
-                cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-                
-                // 3. Aplica um desfoque (Blur) extremo. 
-                // Isso elimina as texturas e ranhuras da esteira, fundindo a peça em um bloco sólido.
-                let ksize = new cv.Size(21, 21);
-                cv.GaussianBlur(gray, blur, ksize, 0, 0, cv.BORDER_DEFAULT);
+                // Calcula a diferença absoluta de luz
+                let diferenca = Math.abs(lumaAtual - lumaAntigo);
 
-                // 4. Binarização Absoluta (A Mágica do Contraste)
-                let valorLimiar = parseInt(sliderLimiar.value);
-                
-                // Se a peça for mais escura que a esteira, usamos INVERSÃO para que o objeto fique Branco.
-                // O OpenCV SÓ RASTREIA O QUE FOR BRANCO (Pixels 255).
-                let tipoThreshold = pecaEscura ? cv.THRESH_BINARY_INV : cv.THRESH_BINARY;
-                
-                // Tudo que cruzar a 'Nota de Corte' vira 255 (Branco), o resto vira 0 (Preto).
-                cv.threshold(blur, thresholded, valorLimiar, 255, tipoThreshold);
-
-                // 5. Encontra as bordas/contornos das manchas brancas que restaram
-                cv.findContours(thresholded, contornos, hierarquia, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-                let deteccoesAtuais = [];
-                let areaMinima = parseInt(sliderArea.value);
-
-                // Passa por todos os objetos brancos encontrados
-                for (let i = 0; i < contornos.size(); ++i) {
-                    let contorno = contornos.get(i);
-                    let area = cv.contourArea(contorno);
+                // Se a diferença for maior que nosso Threshold, é movimento!
+                if (diferenca > threshold) {
+                    // Pinta o pixel de branco na máscara de movimento
+                    pixelsMovimento[i] = 255;   // R
+                    pixelsMovimento[i+1] = 255; // G
+                    pixelsMovimento[i+2] = 255; // B
+                    pixelsMovimento[i+3] = 255; // Alpha
                     
-                    // Se o bloco branco for muito pequeno, é sujeira. Ignora.
-                    if (area > areaMinima) {
-                        let retangulo = cv.boundingRect(contorno);
-                        deteccoesAtuais.push(retangulo); 
-                    }
-                }
-
-                // 6. Rastreamento temporal (Line Crossing)
-                logicaRastreamentoEContagem(deteccoesAtuais);
-
-                // 7. Renderização na Tela
-                // Se a depuração estiver ligada, mostramos o mundo em Preto e Branco
-                if(chkDepuracao.checked) {
-                    cv.imshow('saidaCanvas', thresholded);
+                    // Calcula as coordenadas X e Y na tela (i / 4 = índice do pixel)
+                    let pixelIndex = i / 4;
+                    let y = Math.floor(pixelIndex / 640);
+                    let x = pixelIndex % 640;
+                    
+                    pixelsAtivos.push({x: x, y: y});
                 } else {
-                    cv.imshow('saidaCanvas', src); // Mostra o vídeo original colorido
+                    // Fica transparente/preto
+                    pixelsMovimento[i+3] = 0; 
                 }
                 
-                // Por cima da imagem (seja a real ou a máscara), desenhamos as caixas e a linha vermelha
-                desenharInterface(deteccoesAtuais);
-
-            } catch (err) {
-                console.error("Erro no processamento:", err);
+                // --- ATUALIZA A MEMÓRIA PARA O PRÓXIMO FRAME ---
+                // Para não arrastar fantasmas, misturamos 20% do novo com 80% do velho (Rolling Average Simples)
+                frameAnterior[i] = (frameAnterior[i] * 0.8) + (pixelsAtuais[i] * 0.2);
+                frameAnterior[i+1] = (frameAnterior[i+1] * 0.8) + (pixelsAtuais[i+1] * 0.2);
+                frameAnterior[i+2] = (frameAnterior[i+2] * 0.8) + (pixelsAtuais[i+2] * 0.2);
             }
 
-            requestAnimationFrame(processarVideo);
-        }
+            // Exibe a máscara (Branco/Transparente) no Canvas de Debug, se ativado
+            if (isDebugAtivo) {
+                ctxDebug.putImageData(imagemMovimento, 0, 0);
+            }
 
-        function logicaRastreamentoEContagem(caixasDetectadas) {
-            let objetosAtualizados = new Map();
-
-            caixasDetectadas.forEach(caixa => {
-                // Calcula o ponto exato do meio do objeto
-                let centroX = caixa.x + (caixa.width / 2);
-                let centroY = caixa.y + (caixa.height / 2);
-                
-                let melhorID = -1;
-                let menorDistancia = DISTANCIA_MAX_RASTREAMENTO;
-
-                // Compara a posição atual com as posições dos objetos no frame anterior (Centroid Tracking)
-                for (let [id, posAntiga] of objetosRastreados.entries()) {
-                    let distancia = Math.hypot(centroX - posAntiga.x, centroY - posAntiga.y);
-                    if (distancia < menorDistancia) {
-                        menorDistancia = distancia;
-                        melhorID = id;
-                    }
-                }
-
-                if (melhorID !== -1) {
-                    // É um objeto que já estávamos acompanhando!
-                    let posAntiga = objetosRastreados.get(melhorID);
-                    
-                    // GATILHO DA LINHA VIRTUAL:
-                    // Se ele estava à esquerda da linha (t-1) e agora está à direita (t)
-                    if (posAntiga.x < LINHA_X && centroX >= LINHA_X) {
-                        totalPecas++;
-                        elemContador.innerText = totalPecas;
-                        isFlashAtivo = 15; // Mantém a linha brilhando por 15 frames
-                    }
-                    
-                    // Atualiza a nova posição na memória
-                    objetosAtualizados.set(melhorID, { x: centroX, y: centroY });
-                    // Remove da lista antiga para evitar processamento duplicado
-                    objetosRastreados.delete(melhorID); 
-                } else {
-                    // Se não encontrou histórico próximo, é uma peça nova surgindo na tela
-                    objetosAtualizados.set(proximoID, { x: centroX, y: centroY });
-                    proximoID++;
-                }
-            });
-
-            // Atualiza a memória de curto prazo para o próximo frame
-            objetosRastreados = objetosAtualizados;
-        }
-
-        function desenharInterface(caixasDetectadas) {
-            // Desenha a Linha de Cruzamento no meio da tela
-            ctx.beginPath();
-            ctx.moveTo(LINHA_X, 0);
-            ctx.lineTo(LINHA_X, ALTURA);
-            ctx.lineWidth = 4;
+            // --- 2. AGRUPAMENTO (DILATAÇÃO E CLUSTERING BÁSICO) ---
             
-            if (isFlashAtivo > 0) {
-                // Flash visual de sucesso (Linha Branca com brilho Verde)
-                ctx.strokeStyle = '#FFFFFF'; ctx.shadowBlur = 20; ctx.shadowColor = '#00FF66';
-                isFlashAtivo--;
+            let distanciaAgrupamento = parseInt(document.getElementById('slDilate').value);
+            let areaMinima = parseInt(document.getElementById('slMinArea').value);
+            
+            // Este é um algoritmo simples de agrupamento espacial (Grid Clustering)
+            // Em JavaScript puro, é mais rápido dividir a tela numa grade do que rodar algoritmos pesados de contorno
+            
+            let gridTamanho = distanciaAgrupamento; // Tamanho de cada célula da grade
+            let cols = Math.ceil(640 / gridTamanho);
+            let rows = Math.ceil(480 / gridTamanho);
+            let grid = new Array(cols * rows).fill(null).map(() => []);
+
+            // Coloca os pixels em movimento dentro das células da grade
+            for (let p of pixelsAtivos) {
+                let col = Math.floor(p.x / gridTamanho);
+                let row = Math.floor(p.y / gridTamanho);
+                let idx = row * cols + col;
+                if(idx >= 0 && idx < grid.length) {
+                    grid[idx].push(p);
+                }
+            }
+
+            let agrupamentos = []; // Vai guardar as caixas {minX, maxX, minY, maxY, totalPixels}
+            
+            // Percorre as células que têm muito movimento para formar caixas maiores
+            for (let i = 0; i < grid.length; i++) {
+                if (grid[i].length > (gridTamanho * gridTamanho * 0.1)) { // Se pelo menos 10% da célula tem movimento
+                    
+                    let minX = 640, maxX = 0, minY = 480, maxY = 0;
+                    for(let p of grid[i]) {
+                        if(p.x < minX) minX = p.x; if(p.x > maxX) maxX = p.x;
+                        if(p.y < minY) minY = p.y; if(p.y > maxY) maxY = p.y;
+                    }
+                    
+                    let novoGrupo = { minX, maxX, minY, maxY, totalPixels: grid[i].length };
+                    
+                    // Tenta fundir com grupos existentes próximos
+                    let fundiu = false;
+                    for (let j = 0; j < agrupamentos.length; j++) {
+                        let g = agrupamentos[j];
+                        // Expande as caixas para ver se colidem (isso simula a Dilatação Morfológica)
+                        let overlapX = (novoGrupo.minX - distanciaAgrupamento <= g.maxX) && (novoGrupo.maxX + distanciaAgrupamento >= g.minX);
+                        let overlapY = (novoGrupo.minY - distanciaAgrupamento <= g.maxY) && (novoGrupo.maxY + distanciaAgrupamento >= g.minY);
+                        
+                        if (overlapX && overlapY) {
+                            // Fonde as caixas
+                            g.minX = Math.min(g.minX, novoGrupo.minX);
+                            g.maxX = Math.max(g.maxX, novoGrupo.maxX);
+                            g.minY = Math.min(g.minY, novoGrupo.minY);
+                            g.maxY = Math.max(g.maxY, novoGrupo.maxY);
+                            g.totalPixels += novoGrupo.totalPixels;
+                            fundiu = true;
+                            break;
+                        }
+                    }
+                    if (!fundiu) agrupamentos.push(novoGrupo);
+                }
+            }
+
+            // Consolida fusões secundárias (caso A fundiu com B, e B com C)
+            // Para performance no navegador, aceitaremos a fusão primária.
+
+            let deteccoesTratadas = [];
+            for (let g of agrupamentos) {
+                let largura = g.maxX - g.minX;
+                let altura = g.maxY - g.minY;
+                let areaAproximada = largura * altura;
+
+                // Filtra ruído (poeira) pelo tamanho do bloco
+                if (areaAproximada > areaMinima) {
+                    deteccoesTratadas.push({
+                        x: g.minX,
+                        y: g.minY,
+                        w: largura,
+                        h: altura,
+                        cx: g.minX + (largura / 2),
+                        cy: g.minY + (altura / 2)
+                    });
+                }
+            }
+
+
+            // --- 3. RENDERIZAÇÃO NA TELA ---
+            
+            // Limpa o canvas de saída e desenha o vídeo real por baixo
+            ctxSaida.clearRect(0, 0, 640, 480);
+            if(!isDebugAtivo) {
+                 ctxSaida.drawImage(video, 0, 0, 640, 480);
+            }
+
+            // Desenha a Linha de Corte
+            desenharLinha(LINHA_X, '#ef4444');
+
+            // --- 4. RASTREAR E CONTAR (Mesma lógica segura de antes) ---
+            atualizarRastreadores(deteccoesTratadas);
+
+            // Próximo frame!
+            requestAnimationFrame(loopPrincipal);
+        }
+
+        // LÓGICA DE CENTROID TRACKING E CONTAGEM
+        function atualizarRastreadores(deteccoes) {
+            let rastreadoresAtualizados = [];
+
+            for (let det of deteccoes) {
+                let melhorMatchIndex = -1;
+                let menorDistancia = MAX_DISTANCIA_TRACKING;
+
+                for (let i = 0; i < rastreadoresAtivos.length; i++) {
+                    let rast = rastreadoresAtivos[i];
+                    let dist = Math.hypot(rast.cx - det.cx, rast.cy - det.cy);
+                    if (dist < menorDistancia) {
+                        menorDistancia = dist;
+                        melhorMatchIndex = i;
+                    }
+                }
+
+                if (melhorMatchIndex !== -1) {
+                    let rast = rastreadoresAtivos[melhorMatchIndex];
+                    rast.cxAnterior = rast.cx; 
+                    rast.cx = det.cx;          
+                    rast.cy = det.cy;
+                    rast.caixa = det;
+                    rast.framesInvisivel = 0;
+                    rastreadoresAtualizados.push(rast);
+                    rastreadoresAtivos.splice(melhorMatchIndex, 1); 
+                } else {
+                    rastreadoresAtualizados.push({
+                        id: proximoID++,
+                        cxAnterior: det.cx,
+                        cx: det.cx,
+                        cy: det.cy,
+                        caixa: det,
+                        framesInvisivel: 0,
+                        contada: false
+                    });
+                }
+            }
+
+            for (let rast of rastreadoresAtivos) {
+                rast.framesInvisivel++;
+                if (rast.framesInvisivel < MAX_FRAMES_INVISIVEL) {
+                    rastreadoresAtualizados.push(rast);
+                }
+            }
+
+            rastreadoresAtivos = rastreadoresAtualizados;
+
+            let cruzouAgora = false;
+
+            for (let rast of rastreadoresAtivos) {
+                if (rast.framesInvisivel === 0) {
+                    // Desenha a caixa (Verde se já contou, Amarela se ainda vai cruzar)
+                    let corCaixa = rast.contada ? '#059669' : '#eab308';
+                    ctxSaida.strokeStyle = corCaixa;
+                    ctxSaida.lineWidth = 3;
+                    ctxSaida.strokeRect(rast.caixa.x, rast.caixa.y, rast.caixa.w, rast.caixa.h);
+                    
+                    ctxSaida.fillStyle = corCaixa;
+                    ctxSaida.font = '14px sans-serif';
+                    ctxSaida.fillText('Peça #' + rast.id, rast.caixa.x, rast.caixa.y - 5);
+                }
+
+                // GATILHO DE CRUZAMENTO
+                if (!rast.contada && rast.cxAnterior < LINHA_X && rast.cx >= LINHA_X) {
+                    contador++;
+                    document.getElementById('contadorVal').innerText = contador;
+                    rast.contada = true;
+                    cruzouAgora = true;
+                }
+            }
+
+            if (cruzouAgora) {
+                desenharLinha(LINHA_X, '#ffffff', 8); // Flash de confirmação
+            }
+        }
+
+        function desenharLinha(x, cor, grossura = 3) {
+            ctxSaida.beginPath();
+            ctxSaida.moveTo(x, 0);
+            ctxSaida.lineTo(x, 480);
+            ctxSaida.strokeStyle = cor;
+            ctxSaida.lineWidth = grossura;
+            ctxSaida.stroke();
+        }
+
+        // EVENTOS DA INTERFACE
+        document.getElementById('slThreshold').oninput = (e) => document.getElementById('lblThreshold').innerText = e.target.value;
+        document.getElementById('slMinArea').oninput = (e) => document.getElementById('lblMinArea').innerText = e.target.value;
+        document.getElementById('slDilate').oninput = (e) => document.getElementById('lblDilate').innerText = e.target.value;
+        
+        document.getElementById('btnReset').onclick = () => {
+            contador = 0;
+            document.getElementById('contadorVal').innerText = contador;
+            proximoID = 1;
+            rastreadoresAtivos = [];
+        };
+
+        const btnDebug = document.getElementById('btnDebug');
+        btnDebug.onclick = () => {
+            isDebugAtivo = !isDebugAtivo;
+            document.getElementById('canvasDebug').style.display = isDebugAtivo ? 'block' : 'none';
+            if (isDebugAtivo) {
+                btnDebug.classList.add('active');
+                btnDebug.innerText = 'Ocultar Máscara (Modo Produção)';
             } else {
-                // Estado normal de aguardo (Linha Vermelha sem brilho)
-                ctx.strokeStyle = '#FF0000'; ctx.shadowBlur = 0;
+                btnDebug.classList.remove('active');
+                btnDebug.innerText = 'Ver Máscara de Movimento (Calibrar)';
             }
-            ctx.stroke(); ctx.shadowBlur = 0;
+        };
 
-            // Desenha as Caixas de Tracking sobre as peças
-            caixasDetectadas.forEach(caixa => {
-                ctx.strokeStyle = '#00FF66'; ctx.lineWidth = 2;
-                ctx.strokeRect(caixa.x, caixa.y, caixa.width, caixa.height);
-                
-                // Desenha o pontinho central (o que realmente atravessa a linha matemática)
-                ctx.fillStyle = '#00FF66';
-                let cx = caixa.x + caixa.width / 2; let cy = caixa.y + caixa.height / 2;
-                ctx.fillRect(cx - 3, cy - 3, 6, 6);
-            });
-        }
+        // INICIA
+        window.addEventListener('load', iniciarCamera);
     </script>
 </body>
 </html>

@@ -78,9 +78,9 @@
             
             <div class="secao-controle">
                 <div class="secao-titulo">3. Agrupamento (Peças Juntas)</div>
-                <label style="color: #cbd5e1; font-size: 14px;">Distância para unir peças quebradas <span id="lblDilate" class="valor-display">15</span></label>
-                <!-- Se uma engrenagem tem buracos, o movimento pode separar em 2 peças. Isso junta elas. -->
-                <input type="range" id="slDilate" min="1" max="50" step="1" value="15">
+                <label style="color: #cbd5e1; font-size: 14px;">Distância para unir peças quebradas <span id="lblDilate" class="valor-display">40</span></label>
+                <!-- Aumentamos o limite para 200 para colar peças gigantes que se partem -->
+                <input type="range" id="slDilate" min="1" max="200" step="5" value="40">
             </div>
 
             <div class="btn-group">
@@ -193,16 +193,20 @@
                     let x = pixelIndex % 640;
                     
                     pixelsAtivos.push({x: x, y: y});
+
+                    // MEMÓRIA LENTA (A PEÇA): Se detectou peça, absorve muito devagar para não engolir o meio dela
+                    frameAnterior[i] = (frameAnterior[i] * 0.98) + (pixelsAtuais[i] * 0.02);
+                    frameAnterior[i+1] = (frameAnterior[i+1] * 0.98) + (pixelsAtuais[i+1] * 0.02);
+                    frameAnterior[i+2] = (frameAnterior[i+2] * 0.98) + (pixelsAtuais[i+2] * 0.02);
                 } else {
                     // Fica transparente/preto
                     pixelsMovimento[i+3] = 0; 
+                    
+                    // MEMÓRIA RÁPIDA (O FUNDO): Se não há movimento, adapta rápido às sombras da esteira
+                    frameAnterior[i] = (frameAnterior[i] * 0.8) + (pixelsAtuais[i] * 0.2);
+                    frameAnterior[i+1] = (frameAnterior[i+1] * 0.8) + (pixelsAtuais[i+1] * 0.2);
+                    frameAnterior[i+2] = (frameAnterior[i+2] * 0.8) + (pixelsAtuais[i+2] * 0.2);
                 }
-                
-                // --- ATUALIZA A MEMÓRIA PARA O PRÓXIMO FRAME ---
-                // Para não arrastar fantasmas, misturamos 20% do novo com 80% do velho (Rolling Average Simples)
-                frameAnterior[i] = (frameAnterior[i] * 0.8) + (pixelsAtuais[i] * 0.2);
-                frameAnterior[i+1] = (frameAnterior[i+1] * 0.8) + (pixelsAtuais[i+1] * 0.2);
-                frameAnterior[i+2] = (frameAnterior[i+2] * 0.8) + (pixelsAtuais[i+2] * 0.2);
             }
 
             // Exibe a máscara (Branco/Transparente) no Canvas de Debug, se ativado
@@ -270,8 +274,32 @@
                 }
             }
 
-            // Consolida fusões secundárias (caso A fundiu com B, e B com C)
-            // Para performance no navegador, aceitaremos a fusão primária.
+            // --- SUPER COLA DE CAIXAS (Laço de Consolidação Secundária) ---
+            // Garante que se uma peça grande quebrou em 3, todas vão se fundir no final
+            let fundiuNovamente = true;
+            while (fundiuNovamente) {
+                fundiuNovamente = false;
+                for (let i = 0; i < agrupamentos.length; i++) {
+                    for (let j = i + 1; j < agrupamentos.length; j++) {
+                        let g1 = agrupamentos[i];
+                        let g2 = agrupamentos[j];
+                        let overlapX = (g1.minX - distanciaAgrupamento <= g2.maxX) && (g1.maxX + distanciaAgrupamento >= g2.minX);
+                        let overlapY = (g1.minY - distanciaAgrupamento <= g2.maxY) && (g1.maxY + distanciaAgrupamento >= g2.minY);
+                        
+                        if (overlapX && overlapY) {
+                            g1.minX = Math.min(g1.minX, g2.minX);
+                            g1.maxX = Math.max(g1.maxX, g2.maxX);
+                            g1.minY = Math.min(g1.minY, g2.minY);
+                            g1.maxY = Math.max(g1.maxY, g2.maxY);
+                            g1.totalPixels += g2.totalPixels;
+                            agrupamentos.splice(j, 1); // Remove a caixa sugada
+                            fundiuNovamente = true;
+                            break;
+                        }
+                    }
+                    if (fundiuNovamente) break;
+                }
+            }
 
             let deteccoesTratadas = [];
             for (let g of agrupamentos) {

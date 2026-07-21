@@ -3,343 +3,123 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Contador Universal de Esteira (Agnóstico)</title>
+    <title>Contador IA - TensorFlow</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
-        body { margin: 0; background: #0f172a; color: #f8fafc; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        .header { background: #1e293b; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; }
-        .contador-display { background: #000; border: 2px solid #38bdf8; padding: 10px 25px; border-radius: 8px; font-size: 32px; font-weight: bold; color: #38bdf8; box-shadow: 0 0 15px rgba(56, 189, 248, 0.2); }
-        .main-container { display: flex; flex-direction: column; align-items: center; padding: 20px; gap: 20px; }
-        .video-wrapper { position: relative; width: 640px; height: 480px; background: #000; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.6); border: 1px solid #334155; }
+        body { margin: 0; background: #0f172a; color: #fff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+        .header { background: #1e293b; width: 100%; padding: 15px 0; display: flex; justify-content: center; border-bottom: 2px solid #334155; box-sizing: border-box; }
+        .painel-topo { display: flex; justify-content: space-between; align-items: center; width: 640px; }
+        .contador-display { background: #000; border: 2px solid #38bdf8; padding: 10px 25px; border-radius: 8px; font-size: 32px; font-weight: bold; color: #38bdf8; }
+        .video-wrapper { position: relative; width: 640px; height: 480px; background: #000; border-radius: 8px; overflow: hidden; margin-top: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
         video, canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-        /* O canvas de debug fica escondido por padrão, ativado pelo botão */
-        #canvasDebug { display: none; filter: grayscale(100%) contrast(300%); opacity: 0.8; z-index: 5; }
-        #canvasSaida { z-index: 10; }
-        .painel-controles { background: #1e293b; padding: 25px; border-radius: 12px; width: 640px; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px; border: 1px solid #334155; }
-        
-        .secao-controle { display: flex; flex-direction: column; gap: 8px; background: #0f172a; padding: 15px; border-radius: 8px; border: 1px solid #1e293b; }
-        .secao-titulo { font-size: 14px; font-weight: 600; color: #94a3b8; text-transform: uppercase; margin-bottom: 5px; }
-        
-        input[type="range"] { width: 100%; height: 6px; background: #334155; border-radius: 3px; outline: none; -webkit-appearance: none; }
-        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #38bdf8; cursor: pointer; }
-        
-        .valor-display { float: right; color: #38bdf8; font-family: monospace; font-size: 16px; font-weight: bold; }
-        
-        .btn-group { display: flex; gap: 10px; margin-top: 10px; }
-        button { flex: 1; background: #2563eb; color: white; border: none; padding: 14px; border-radius: 8px; font-size: 15px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
-        button:hover { background: #1d4ed8; }
-        button.btn-secundario { background: #475569; }
-        button.btn-secundario:hover { background: #334155; }
-        button.active { background: #059669; box-shadow: 0 0 10px rgba(5, 150, 105, 0.5); }
-        
-        #avisoAcesso { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: #94a3b8; z-index: 1; width: 80%; }
+        #loading { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(15, 23, 42, 0.9); display:flex; justify-content:center; align-items:center; z-index: 9999; font-size: 20px; flex-direction: column; gap: 20px; text-align: center; }
+        .spinner { border: 6px solid #334155; border-top: 6px solid #38bdf8; border-radius: 50%; width: 60px; height: 60px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .controles { margin-top: 20px; width: 640px; background: #1e293b; padding: 20px; border-radius: 8px; box-sizing: border-box; }
+        .dica { color: #94a3b8; font-size: 14px; margin-bottom: 10px; }
     </style>
 </head>
 <body>
 
-    <div class="header">
-        <h2>Contador Universal (Fluxo Ótico)</h2>
-        <div class="contador-display">PEÇAS: <span id="contadorVal">0</span></div>
+    <div id="loading">
+        <div class="spinner"></div>
+        <div id="status">A carregar IA do Google (TensorFlow)...<br><small>Isso pode levar alguns segundos na primeira vez.</small></div>
     </div>
 
-    <div class="main-container">
-        <div class="video-wrapper">
-            <div id="avisoAcesso">A aguardar acesso à câmara...<br><small>(Certifique-se de usar HTTPS)</small></div>
-            <!-- Ocultamos o vídeo original pois vamos processá-lo via Canvas -->
-            <video id="webcam" autoplay playsinline muted style="display: none;"></video>
-            
-            <!-- Canvas 1: Processamento de Diferença (escondido) -->
-            <canvas id="canvasProcessamento" width="640" height="480" style="display: none;"></canvas>
-            
-            <!-- Canvas 2: Visualização da Máscara de Movimento -->
-            <canvas id="canvasDebug" width="640" height="480"></canvas>
-            
-            <!-- Canvas 3: Visualização Final (Onde as caixas e a linha aparecem) -->
-            <canvas id="canvasSaida" width="640" height="480"></canvas>
+    <div class="header">
+        <div class="painel-topo">
+            <h2>Contador de Esteira (IA)</h2>
+            <div class="contador-display">PEÇAS: <span id="contadorVal">0</span></div>
         </div>
+    </div>
 
-        <div class="painel-controles">
-            <p style="margin: 0; color: #94a3b8; font-size: 14px;">
-                Este sistema não usa IA. Ele calcula a <strong>diferença de pixels em movimento</strong> entre o frame atual e o anterior. Ideal para ignorar cores de esteira e contar qualquer peça que se mova.
-            </p>
+    <div class="video-wrapper">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="canvasSaida" width="640" height="480"></canvas>
+    </div>
 
-            <div class="secao-controle">
-                <div class="secao-titulo">1. Sensibilidade ao Movimento</div>
-                <label style="color: #cbd5e1; font-size: 14px;">O que é "movimento"? (Menos = mais sensível) <span id="lblThreshold" class="valor-display">30</span></label>
-                <!-- Menor detecta peças com contraste quase nulo se movendo, mas pega ruído -->
-                <input type="range" id="slThreshold" min="5" max="100" step="1" value="30">
-            </div>
-
-            <div class="secao-controle">
-                <div class="secao-titulo">2. Ignorar Poeira (Ruído)</div>
-                <label style="color: #cbd5e1; font-size: 14px;">Tamanho mínimo do bloco em movimento <span id="lblMinArea" class="valor-display">800</span></label>
-                <!-- Evita que um grão de poeira ou reflexo passe pela linha e conte -->
-                <input type="range" id="slMinArea" min="50" max="5000" step="50" value="800">
-            </div>
-            
-            <div class="secao-controle">
-                <div class="secao-titulo">3. Agrupamento (Peças Juntas)</div>
-                <label style="color: #cbd5e1; font-size: 14px;">Distância para unir peças quebradas <span id="lblDilate" class="valor-display">40</span></label>
-                <!-- Aumentamos o limite para 200 para colar peças gigantes que se partem -->
-                <input type="range" id="slDilate" min="1" max="200" step="5" value="40">
-            </div>
-
-            <div class="btn-group">
-                <button id="btnDebug" class="btn-secundario">Ver Máscara de Movimento (Calibrar)</button>
-                <button id="btnReset" class="btn-secundario">Zerar Contador</button>
-            </div>
+    <div class="controles">
+        <div class="dica">
+            <strong>Como funciona agora:</strong><br>
+            A Inteligência Artificial reconhece a forma de objetos sólidos. Não importa a cor da esteira, reflexos de luz ou manchas.
+        </div>
+        <div style="display: flex; gap: 10px;">
+            <button onclick="zerarContador()" style="background: #dc3545; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold;">Zerar Contador</button>
         </div>
     </div>
 
     <script>
         const video = document.getElementById('webcam');
-        const cvsProc = document.getElementById('canvasProcessamento');
-        const ctxProc = cvsProc.getContext('2d', { willReadFrequently: true });
+        const canvasSaida = document.getElementById('canvasSaida');
+        const ctxSaida = canvasSaida.getContext('2d');
         
-        const cvsDebug = document.getElementById('canvasDebug');
-        const ctxDebug = cvsDebug.getContext('2d');
-        
-        const cvsSaida = document.getElementById('canvasSaida');
-        const ctxSaida = cvsSaida.getContext('2d');
-        
-        const LINHA_X = 320;
+        let modeloIA = null;
         let contador = 0;
-        let isDebugAtivo = false;
-        
-        // Memória do frame anterior para comparar
-        let frameAnterior = null;
+        const LINHA_X = 320; // Linha bem no meio da tela
 
-        // Sistema de Tracking Próprio (Centroid Tracker Simples)
+        // Sistema de rastreamento de IDs
         let rastreadoresAtivos = [];
         let proximoID = 1;
-        const MAX_DISTANCIA_TRACKING = 100; 
-        const MAX_FRAMES_INVISIVEL = 5;
+        const MAX_DISTANCIA_TRACKING = 150; // Quão longe a peça pode andar por frame
+        const MAX_FRAMES_INVISIVEL = 10;    // Memória caso a IA pisque
 
-        // INICIALIZAÇÃO DA CÂMERA
-        async function iniciarCamera() {
+        async function iniciarApp() {
             try {
+                document.getElementById('status').innerHTML = "A pedir acesso à câmara...";
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: 'environment', width: 640, height: 480 }
                 });
                 video.srcObject = stream;
-                
-                video.addEventListener('playing', () => {
-                    document.getElementById('avisoAcesso').style.display = 'none';
-                    // Aguarda o vídeo ter largura para começar
-                    verificarDimensoes();
-                });
+
+                video.onloadeddata = async () => {
+                    document.getElementById('status').innerHTML = "Câmara pronta. A carregar o Cérebro da IA...<br><small>(Fazendo download do modelo de visão)</small>";
+                    
+                    // Carrega o modelo pré-treinado do Google
+                    modeloIA = await cocoSsd.load();
+                    
+                    document.getElementById('loading').style.display = 'none';
+                    detectarFrame(); // Inicia o loop da IA
+                };
             } catch (err) {
-                document.getElementById('avisoAcesso').innerHTML = "Erro ao acessar a câmara.<br><small style='color:#ef4444'>" + err.message + "</small>";
+                alert("Erro ao aceder à câmara. Tente via HTTPS ou Localhost.");
+                console.error(err);
             }
         }
 
-        function verificarDimensoes() {
-            if (video.videoWidth > 0) {
-                // Inicia o loop apenas quando tiver o frame real
-                requestAnimationFrame(loopPrincipal);
-            } else {
-                setTimeout(verificarDimensoes, 100);
-            }
-        }
-
-        // LOOP PRINCIPAL (RODA A 30 FPS)
-        function loopPrincipal() {
-            // Desenha o vídeo atual no canvas de processamento
-            ctxProc.drawImage(video, 0, 0, 640, 480);
-            
-            // Pega os pixels do frame atual
-            let frameAtualImgData = ctxProc.getImageData(0, 0, 640, 480);
-            let pixelsAtuais = frameAtualImgData.data;
-
-            // Se for o primeiro frame, apenas guarda na memória e pula
-            if (!frameAnterior) {
-                // Cria a estrutura do frame anterior
-                frameAnterior = new Uint8ClampedArray(pixelsAtuais.length);
-                frameAnterior.set(pixelsAtuais);
-                requestAnimationFrame(loopPrincipal);
-                return;
-            }
-
-            // --- 1. MATEMÁTICA DA DIFERENÇA DE FRAMES ---
-            
-            let threshold = parseInt(document.getElementById('slThreshold').value);
-            
-            // Criamos uma imagem vazia (preta) para guardar o "movimento"
-            let imagemMovimento = ctxProc.createImageData(640, 480);
-            let pixelsMovimento = imagemMovimento.data;
-
-            // Variável para guardar caixas de movimento bruto antes do agrupamento
-            let pixelsAtivos = []; // Array de [x, y]
-
-            for (let i = 0; i < pixelsAtuais.length; i += 4) {
-                // Convertemos o pixel atual e o antigo para escala de cinza de forma rápida
-                // Usando a fórmula aproximada de luminosidade: Y = 0.299R + 0.587G + 0.114B
-                let lumaAtual = (pixelsAtuais[i] * 0.299) + (pixelsAtuais[i+1] * 0.587) + (pixelsAtuais[i+2] * 0.114);
-                let lumaAntigo = (frameAnterior[i] * 0.299) + (frameAnterior[i+1] * 0.587) + (frameAnterior[i+2] * 0.114);
+        function detectarFrame() {
+            // A IA analisa o frame do vídeo e devolve as caixas prontas!
+            modeloIA.detect(video).then(predictions => {
                 
-                // Calcula a diferença absoluta de luz
-                let diferenca = Math.abs(lumaAtual - lumaAntigo);
+                ctxSaida.clearRect(0, 0, canvasSaida.width, canvasSaida.height);
+                desenharLinha(LINHA_X, '#ef4444'); // Linha Vermelha de espera
 
-                // Se a diferença for maior que nosso Threshold, é movimento!
-                if (diferenca > threshold) {
-                    // Pinta o pixel de branco na máscara de movimento
-                    pixelsMovimento[i] = 255;   // R
-                    pixelsMovimento[i+1] = 255; // G
-                    pixelsMovimento[i+2] = 255; // B
-                    pixelsMovimento[i+3] = 255; // Alpha
-                    
-                    // Calcula as coordenadas X e Y na tela (i / 4 = índice do pixel)
-                    let pixelIndex = i / 4;
-                    let y = Math.floor(pixelIndex / 640);
-                    let x = pixelIndex % 640;
-                    
-                    pixelsAtivos.push({x: x, y: y});
+                let deteccoesTratadas = [];
 
-                    // MEMÓRIA LENTA (A PEÇA): Se detectou peça, absorve muito devagar para não engolir o meio dela
-                    frameAnterior[i] = (frameAnterior[i] * 0.98) + (pixelsAtuais[i] * 0.02);
-                    frameAnterior[i+1] = (frameAnterior[i+1] * 0.98) + (pixelsAtuais[i+1] * 0.02);
-                    frameAnterior[i+2] = (frameAnterior[i+2] * 0.98) + (pixelsAtuais[i+2] * 0.02);
-                } else {
-                    // Fica transparente/preto
-                    pixelsMovimento[i+3] = 0; 
-                    
-                    // MEMÓRIA RÁPIDA (O FUNDO): Se não há movimento, adapta rápido às sombras da esteira
-                    frameAnterior[i] = (frameAnterior[i] * 0.8) + (pixelsAtuais[i] * 0.2);
-                    frameAnterior[i+1] = (frameAnterior[i+1] * 0.8) + (pixelsAtuais[i+1] * 0.2);
-                    frameAnterior[i+2] = (frameAnterior[i+2] * 0.8) + (pixelsAtuais[i+2] * 0.2);
-                }
-            }
+                // Para cada objeto que a IA encontrou na tela...
+                predictions.forEach(prediction => {
+                    // O TensorFlow retorna [x, y, largura, altura]
+                    let [x, y, width, height] = prediction.bbox;
+                    let centroX = x + (width / 2);
+                    let centroY = y + (height / 2);
 
-            // Exibe a máscara (Branco/Transparente) no Canvas de Debug, se ativado
-            if (isDebugAtivo) {
-                ctxDebug.putImageData(imagemMovimento, 0, 0);
-            }
-
-            // --- 2. AGRUPAMENTO (DILATAÇÃO E CLUSTERING BÁSICO) ---
-            
-            let distanciaAgrupamento = parseInt(document.getElementById('slDilate').value);
-            let areaMinima = parseInt(document.getElementById('slMinArea').value);
-            
-            // Este é um algoritmo simples de agrupamento espacial (Grid Clustering)
-            // Em JavaScript puro, é mais rápido dividir a tela numa grade do que rodar algoritmos pesados de contorno
-            
-            let gridTamanho = distanciaAgrupamento; // Tamanho de cada célula da grade
-            let cols = Math.ceil(640 / gridTamanho);
-            let rows = Math.ceil(480 / gridTamanho);
-            let grid = new Array(cols * rows).fill(null).map(() => []);
-
-            // Coloca os pixels em movimento dentro das células da grade
-            for (let p of pixelsAtivos) {
-                let col = Math.floor(p.x / gridTamanho);
-                let row = Math.floor(p.y / gridTamanho);
-                let idx = row * cols + col;
-                if(idx >= 0 && idx < grid.length) {
-                    grid[idx].push(p);
-                }
-            }
-
-            let agrupamentos = []; // Vai guardar as caixas {minX, maxX, minY, maxY, totalPixels}
-            
-            // Percorre as células que têm muito movimento para formar caixas maiores
-            for (let i = 0; i < grid.length; i++) {
-                if (grid[i].length > (gridTamanho * gridTamanho * 0.1)) { // Se pelo menos 10% da célula tem movimento
-                    
-                    let minX = 640, maxX = 0, minY = 480, maxY = 0;
-                    for(let p of grid[i]) {
-                        if(p.x < minX) minX = p.x; if(p.x > maxX) maxX = p.x;
-                        if(p.y < minY) minY = p.y; if(p.y > maxY) maxY = p.y;
+                    // Ignorar coisas microscópicas (ruído)
+                    if (width > 30 && height > 30) {
+                        deteccoesTratadas.push({
+                            x: x, y: y, w: width, h: height,
+                            cx: centroX, cy: centroY,
+                            classe: prediction.class // O que a IA acha que é (ex: "cell phone", "bottle")
+                        });
                     }
-                    
-                    let novoGrupo = { minX, maxX, minY, maxY, totalPixels: grid[i].length };
-                    
-                    // Tenta fundir com grupos existentes próximos
-                    let fundiu = false;
-                    for (let j = 0; j < agrupamentos.length; j++) {
-                        let g = agrupamentos[j];
-                        // Expande as caixas para ver se colidem (isso simula a Dilatação Morfológica)
-                        let overlapX = (novoGrupo.minX - distanciaAgrupamento <= g.maxX) && (novoGrupo.maxX + distanciaAgrupamento >= g.minX);
-                        let overlapY = (novoGrupo.minY - distanciaAgrupamento <= g.maxY) && (novoGrupo.maxY + distanciaAgrupamento >= g.minY);
-                        
-                        if (overlapX && overlapY) {
-                            // Fonde as caixas
-                            g.minX = Math.min(g.minX, novoGrupo.minX);
-                            g.maxX = Math.max(g.maxX, novoGrupo.maxX);
-                            g.minY = Math.min(g.minY, novoGrupo.minY);
-                            g.maxY = Math.max(g.maxY, novoGrupo.maxY);
-                            g.totalPixels += novoGrupo.totalPixels;
-                            fundiu = true;
-                            break;
-                        }
-                    }
-                    if (!fundiu) agrupamentos.push(novoGrupo);
-                }
-            }
+                });
 
-            // --- SUPER COLA DE CAIXAS (Laço de Consolidação Secundária) ---
-            // Garante que se uma peça grande quebrou em 3, todas vão se fundir no final
-            let fundiuNovamente = true;
-            while (fundiuNovamente) {
-                fundiuNovamente = false;
-                for (let i = 0; i < agrupamentos.length; i++) {
-                    for (let j = i + 1; j < agrupamentos.length; j++) {
-                        let g1 = agrupamentos[i];
-                        let g2 = agrupamentos[j];
-                        let overlapX = (g1.minX - distanciaAgrupamento <= g2.maxX) && (g1.maxX + distanciaAgrupamento >= g2.minX);
-                        let overlapY = (g1.minY - distanciaAgrupamento <= g2.maxY) && (g1.maxY + distanciaAgrupamento >= g2.minY);
-                        
-                        if (overlapX && overlapY) {
-                            g1.minX = Math.min(g1.minX, g2.minX);
-                            g1.maxX = Math.max(g1.maxX, g2.maxX);
-                            g1.minY = Math.min(g1.minY, g2.minY);
-                            g1.maxY = Math.max(g1.maxY, g2.maxY);
-                            g1.totalPixels += g2.totalPixels;
-                            agrupamentos.splice(j, 1); // Remove a caixa sugada
-                            fundiuNovamente = true;
-                            break;
-                        }
-                    }
-                    if (fundiuNovamente) break;
-                }
-            }
+                atualizarRastreadores(deteccoesTratadas);
 
-            let deteccoesTratadas = [];
-            for (let g of agrupamentos) {
-                let largura = g.maxX - g.minX;
-                let altura = g.maxY - g.minY;
-                let areaAproximada = largura * altura;
-
-                // Filtra ruído (poeira) pelo tamanho do bloco
-                if (areaAproximada > areaMinima) {
-                    deteccoesTratadas.push({
-                        x: g.minX,
-                        y: g.minY,
-                        w: largura,
-                        h: altura,
-                        cx: g.minX + (largura / 2),
-                        cy: g.minY + (altura / 2)
-                    });
-                }
-            }
-
-
-            // --- 3. RENDERIZAÇÃO NA TELA ---
-            
-            // Limpa o canvas de saída e desenha o vídeo real por baixo
-            ctxSaida.clearRect(0, 0, 640, 480);
-            if(!isDebugAtivo) {
-                 ctxSaida.drawImage(video, 0, 0, 640, 480);
-            }
-
-            // Desenha a Linha de Corte
-            desenharLinha(LINHA_X, '#ef4444');
-
-            // --- 4. RASTREAR E CONTAR (Mesma lógica segura de antes) ---
-            atualizarRastreadores(deteccoesTratadas);
-
-            // Próximo frame!
-            requestAnimationFrame(loopPrincipal);
+                // Pede o próximo frame
+                requestAnimationFrame(detectarFrame);
+            });
         }
 
-        // LÓGICA DE CENTROID TRACKING E CONTAGEM
         function atualizarRastreadores(deteccoes) {
             let rastreadoresAtualizados = [];
 
@@ -391,19 +171,22 @@
 
             for (let rast of rastreadoresAtivos) {
                 if (rast.framesInvisivel === 0) {
-                    // Desenha a caixa (Verde se já contou, Amarela se ainda vai cruzar)
-                    let corCaixa = rast.contada ? '#059669' : '#eab308';
+                    // Desenha a caixa (Verde se já contou, Azul claro se não)
+                    let corCaixa = rast.contada ? '#22c55e' : '#38bdf8';
                     ctxSaida.strokeStyle = corCaixa;
-                    ctxSaida.lineWidth = 3;
+                    ctxSaida.lineWidth = 4;
                     ctxSaida.strokeRect(rast.caixa.x, rast.caixa.y, rast.caixa.w, rast.caixa.h);
                     
                     ctxSaida.fillStyle = corCaixa;
-                    ctxSaida.font = '14px sans-serif';
-                    ctxSaida.fillText('Peça #' + rast.id, rast.caixa.x, rast.caixa.y - 5);
+                    ctxSaida.font = '16px sans-serif';
+                    ctxSaida.fillText(`ID:${rast.id} (${rast.caixa.classe})`, rast.caixa.x, rast.caixa.y - 8);
                 }
 
-                // GATILHO DE CRUZAMENTO
-                if (!rast.contada && rast.cxAnterior < LINHA_X && rast.cx >= LINHA_X) {
+                // Gatilho Bi-direcional
+                let cruzouDaEsquerda = (rast.cxAnterior < LINHA_X && rast.cx >= LINHA_X);
+                let cruzouDaDireita = (rast.cxAnterior > LINHA_X && rast.cx <= LINHA_X);
+
+                if (!rast.contada && (cruzouDaEsquerda || cruzouDaDireita)) {
                     contador++;
                     document.getElementById('contadorVal').innerText = contador;
                     rast.contada = true;
@@ -412,46 +195,28 @@
             }
 
             if (cruzouAgora) {
-                desenharLinha(LINHA_X, '#ffffff', 8); // Flash de confirmação
+                desenharLinha(LINHA_X, '#ffffff', 8); 
             }
         }
 
         function desenharLinha(x, cor, grossura = 3) {
             ctxSaida.beginPath();
             ctxSaida.moveTo(x, 0);
-            ctxSaida.lineTo(x, 480);
+            ctxSaida.lineTo(x, canvasSaida.height);
             ctxSaida.strokeStyle = cor;
             ctxSaida.lineWidth = grossura;
             ctxSaida.stroke();
         }
 
-        // EVENTOS DA INTERFACE
-        document.getElementById('slThreshold').oninput = (e) => document.getElementById('lblThreshold').innerText = e.target.value;
-        document.getElementById('slMinArea').oninput = (e) => document.getElementById('lblMinArea').innerText = e.target.value;
-        document.getElementById('slDilate').oninput = (e) => document.getElementById('lblDilate').innerText = e.target.value;
-        
-        document.getElementById('btnReset').onclick = () => {
+        function zerarContador() {
             contador = 0;
             document.getElementById('contadorVal').innerText = contador;
             proximoID = 1;
             rastreadoresAtivos = [];
-        };
+        }
 
-        const btnDebug = document.getElementById('btnDebug');
-        btnDebug.onclick = () => {
-            isDebugAtivo = !isDebugAtivo;
-            document.getElementById('canvasDebug').style.display = isDebugAtivo ? 'block' : 'none';
-            if (isDebugAtivo) {
-                btnDebug.classList.add('active');
-                btnDebug.innerText = 'Ocultar Máscara (Modo Produção)';
-            } else {
-                btnDebug.classList.remove('active');
-                btnDebug.innerText = 'Ver Máscara de Movimento (Calibrar)';
-            }
-        };
-
-        // INICIA
-        window.addEventListener('load', iniciarCamera);
+        // Inicia a aplicação quando a página carrega
+        window.addEventListener('load', iniciarApp);
     </script>
 </body>
 </html>
